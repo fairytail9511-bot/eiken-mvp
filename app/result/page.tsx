@@ -4,7 +4,7 @@
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -444,7 +444,7 @@ function ThreeBlockCard({
 /* =====================
    Page
 ===================== */
-export default function ResultPage() {
+ function ResultInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const fromRecords = sp.get("from") === "records";
@@ -984,5 +984,12 @@ export default function ResultPage() {
         </div>
       </div>
     </main>
+  );
+}
+export default function ResultPage(){
+  return(
+    <Suspense fallback={<div style={{ padding:24, color: "#fff" }}>Loading...</div>}>
+      <ResultInner/>
+      </Suspense>
   );
 }
