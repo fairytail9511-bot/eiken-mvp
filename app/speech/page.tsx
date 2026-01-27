@@ -1,7 +1,10 @@
 // app/speech/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 
@@ -34,7 +37,7 @@ function formatMMSS(totalSec: number) {
   return `${mm}:${ss}`;
 }
 
-export default function SpeechPage() {
+function SpeechInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -178,18 +181,23 @@ export default function SpeechPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 🔊 auto speak once (最初の案内)
+  // 🔊 auto speak once (最初の案内) + timer
   const didSpeakRef = useRef(false);
   useEffect(() => {
     if (didSpeakRef.current) return;
     didSpeakRef.current = true;
 
+    let timerId: number | null = null;
+
     (async () => {
       await speakOnce(examinerLine);
       startedAtRef.current = Date.now();
-      const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
-      return () => window.clearInterval(timer);
+      timerId = window.setInterval(() => setTick((t) => t + 1), 1000);
     })();
+
+    return () => {
+      if (timerId) window.clearInterval(timerId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -276,16 +284,6 @@ export default function SpeechPage() {
     gap: 12,
   };
 
-  const bottomStyle: React.CSSProperties = {
-    position: "sticky",
-    bottom: 0,
-    zIndex: 10,
-    padding: 14,
-    background:
-      "linear-gradient(0deg, rgba(11,18,32,0.96) 0%, rgba(7,10,18,0.88) 60%, rgba(7,10,18,0) 100%)",
-    backdropFilter: "blur(6px)",
-  };
-
   const micBtnStyle: React.CSSProperties = {
     flex: "0 0 132px",
     padding: "12px 14px",
@@ -360,9 +358,7 @@ export default function SpeechPage() {
       const mime = pickBestMimeType();
       mimeRef.current = mime;
 
-      const recorder = mime
-        ? new MediaRecorder(stream, { mimeType: mime })
-        : new MediaRecorder(stream);
+      const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       recorderRef.current = recorder;
       chunksRef.current = [];
 
@@ -487,17 +483,15 @@ export default function SpeechPage() {
       <div style={shellStyle}>
         {/* ===== TOP (sticky): avatar + small info ===== */}
         <div style={topStyle}>
-          
-
           <div style={avatarWrapStyle}>
             <div style={avatarBoxStyle}>
               <Image
                 src={isMouthOpen ? AVATAR_EXAMINER_OPEN : AVATAR_EXAMINER_CLOSED}
-              alt="Examiner"
-              width={900}
-              height={900}
-              style={{ width: "100%", height: "140%",objectFit: "cover",display: "block" }}
-              priority
+                alt="Examiner"
+                width={900}
+                height={900}
+                style={{ width: "100%", height: "140%", objectFit: "cover", display: "block" }}
+                priority
               />
             </div>
           </div>
@@ -506,10 +500,15 @@ export default function SpeechPage() {
           {showTranscript && (
             <div style={smallCard}>
               <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                <div style={{ fontWeight: 900, minWidth: 88, color: "rgba(255,255,255,0.9)" }}>
-                  Examiner:
-                </div>
-                <div style={{ fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap", color: "rgba(255,255,255,0.92)" }}>
+                <div style={{ fontWeight: 900, minWidth: 88, color: "rgba(255,255,255,0.9)" }}>Examiner:</div>
+                <div
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1.4,
+                    whiteSpace: "pre-wrap",
+                    color: "rgba(255,255,255,0.92)",
+                  }}
+                >
                   {examinerLine}
                 </div>
               </div>
@@ -519,7 +518,14 @@ export default function SpeechPage() {
           {/* Topic + Timer (compact) */}
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{ ...smallCard, flex: 1 }}>
-              <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4, color: "rgba(255,255,255,0.75)" }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  opacity: 0.8,
+                  marginBottom: 4,
+                  color: "rgba(255,255,255,0.75)",
+                }}
+              >
                 Topic
               </div>
               <div style={{ fontSize: 13, fontWeight: 800, color: "rgba(255,255,255,0.92)" }}>
@@ -542,10 +548,15 @@ export default function SpeechPage() {
             <div style={smallCard}>
               {showTranscript && (
                 <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                  <div style={{ fontWeight: 900, minWidth: 88, color: "rgba(255,255,255,0.9)" }}>
-                    Examiner:
-                  </div>
-                  <div style={{ fontSize: 13, lineHeight: 1.4, whiteSpace: "pre-wrap", color: "rgba(255,255,255,0.92)" }}>
+                  <div style={{ fontWeight: 900, minWidth: 88, color: "rgba(255,255,255,0.9)" }}>Examiner:</div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      lineHeight: 1.4,
+                      whiteSpace: "pre-wrap",
+                      color: "rgba(255,255,255,0.92)",
+                    }}
+                  >
                     {qaIntroLine}
                   </div>
                 </div>
@@ -563,9 +574,15 @@ export default function SpeechPage() {
           {phase === "speech" && (
             <>
               <div style={smallCard}>
-                
-
-                <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "center", flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
                   <button
                     type="button"
                     onClick={startRecording}
@@ -649,9 +666,15 @@ export default function SpeechPage() {
             </div>
           )}
         </div>
-
-        
       </div>
     </main>
+  );
+}
+
+export default function SpeechPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#fff" }}>Loading...</div>}>
+      <SpeechInner />
+    </Suspense>
   );
 }
