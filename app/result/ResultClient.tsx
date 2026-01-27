@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 /* =====================
-   Types
+   Types 
 ===================== */
 type Msg = { role: "examiner" | "user"; text: string };
 
