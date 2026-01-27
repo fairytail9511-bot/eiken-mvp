@@ -246,11 +246,11 @@ const cardOuter: React.CSSProperties = {
   borderRadius: 16,
   boxShadow: "0 12px 30px rgba(0,0,0,0.55)",
   overflow: "hidden",
-  background: "rgba(255,255,255,0.96)", // ← 透明をやめる
+  background: "rgba(255,255,255,0.96)",
 };
 
 const cardInnerWhite: React.CSSProperties = {
-  background: "transparent", // ← 内側は透明でOK
+  background: "transparent",
   borderRadius: 14,
 };
 
@@ -442,9 +442,9 @@ function ThreeBlockCard({
 }
 
 /* =====================
-   Page
+   Inner (useSearchParams here)
 ===================== */
- function ResultInner() {
+function ResultInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const fromRecords = sp.get("from") === "records";
@@ -452,17 +452,14 @@ function ThreeBlockCard({
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState<string>("");
-
-  // Speech AI state
+  
   const [speechAi, setSpeechAi] = useState<SpeechAIFeedback | null>(null);
   const [speechAiLoading, setSpeechAiLoading] = useState(false);
   const [speechAiError, setSpeechAiError] = useState("");
 
-  // ✅ 文書のみ再評価
   const [regenLoading, setRegenLoading] = useState(false);
   const [regenError, setRegenError] = useState("");
 
-  // ✅ 保存UI
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveDone, setSaveDone] = useState(false);
 
@@ -476,7 +473,6 @@ function ThreeBlockCard({
 
       const parsed = JSON.parse(raw) as any;
 
-      // ✅ 所要時間（表示 + sessionに保存）
       let durationSec: number | undefined = undefined;
 
       try {
@@ -500,7 +496,6 @@ function ThreeBlockCard({
         }
       } catch {}
 
-      // records から開いた時は sessionData.durationSec で表示
       try {
         if (!durationSec) {
           const dur = Number((nextSession as any)?.durationSec);
@@ -514,7 +509,6 @@ function ThreeBlockCard({
     }
   }, []);
 
-  // ===== Score =====
   const breakdown = sessionData?.scoreResult?.breakdown ?? {};
   const bShort = asInt(breakdown.short_speech);
   const bInter = asInt(breakdown.interaction);
@@ -532,12 +526,10 @@ function ThreeBlockCard({
     };
   }, [sessionData?.scoreResult?.three_blocks]);
 
-  // ===== Logs =====
   const smalltalk = sessionData?.logs?.smalltalk ?? [];
   const speechRaw = sessionData?.logs?.speech ?? "";
   const speechText = useMemo(() => normalizeSpeechText(speechRaw), [speechRaw]);
 
-  // Speech AI (template禁止)
   async function fetchSpeechAiOnce(force: boolean) {
     setSpeechAiError("");
     setSpeechAi(null);
@@ -597,10 +589,8 @@ function ThreeBlockCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speechText]);
 
-  // ===== Q&A analysis =====
   const qaAnalysis = sessionData?.qaAnalysis ?? [];
 
-  // 🔁 文書のみ再評価（総合スコア用：three_blocks / section_feedback / comment）
   async function regenTextsOnly() {
     setRegenError("");
     if (!sessionData) {
@@ -663,7 +653,6 @@ function ThreeBlockCard({
     }
   }
 
-  // 💾保存
   function onClickSave() {
     setError("");
     setSaveDone(false);
@@ -684,7 +673,7 @@ function ThreeBlockCard({
     }
   }
 
-    return (
+  return (
     <main
       style={{
         ...pageBg,
@@ -693,7 +682,6 @@ function ThreeBlockCard({
         justifyContent: "center",
       }}
     >
-      {/* Smalltalkと同じ：中央に1枚のshellを固定 */}
       <div
         style={{
           width: "100%",
@@ -705,7 +693,7 @@ function ThreeBlockCard({
           gap: 12,
         }}
       >
-        {/* ===== Top fixed ===== */}
+        {/* Top fixed */}
         <div style={{ flex: "none" }}>
           <div style={{ color: "#fff" }}>
             <div style={{ fontSize: 18, fontWeight: 900, lineHeight: 1.2 }}>面接結果</div>
@@ -724,7 +712,7 @@ function ThreeBlockCard({
           )}
         </div>
 
-        {/* ===== Middle scroll ===== */}
+        {/* Middle scroll */}
         <div style={{ flex: 1, overflowY: "auto", paddingBottom: 8 }}>
           <div style={{ display: "grid", gap: 12 }}>
             <Accordion
@@ -732,7 +720,7 @@ function ThreeBlockCard({
               title="総合スコア"
               right={
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontWeight: 900, color: "#111", fontSize: 10, whiteSpace: "nowrap" }}>
+                  <span style={{ fontWeight: 900, color: "#111", fontSize: 12, whiteSpace: "nowrap" }}>
                     {total} / 40
                   </span>
                   <button
@@ -932,7 +920,7 @@ function ThreeBlockCard({
           </div>
         </div>
 
-        {/* ===== Bottom fixed ===== */}
+        {/* Bottom fixed */}
         <div style={{ flex: "none", paddingTop: 6, paddingBottom: 10 }}>
           <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
             <Link
@@ -986,10 +974,14 @@ function ThreeBlockCard({
     </main>
   );
 }
-export default function ResultPage(){
-  return(
-    <Suspense fallback={<div style={{ padding:24, color: "#fff" }}>Loading...</div>}>
-      <ResultInner/>
-      </Suspense>
+
+/* =====================
+   Page (Suspense wrapper)
+===================== */
+export default function ResultPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#fff" }}>Loading...</div>}>
+      <ResultInner />
+    </Suspense>
   );
 }
