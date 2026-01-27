@@ -1,5 +1,5 @@
 // app/speech/SpeechClient.tsx
-"use client";
+"use client";  
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
