@@ -362,7 +362,11 @@ function Accordion({
           </div>
         </div>
 
-        {open && <div style={{ padding: "12px 12px 14px 12px" }}>{children}</div>}
+        {open && (
+            <div style={{ padding: "12px 12px 14px 12px", color:"#0f172a" }}>
+                {children}
+                </div>
+            )}
       </div>
     </div>
   );
@@ -730,7 +734,7 @@ export default function ResultClient() {
                 </div>
               }
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで数十秒かかる場合があります。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。</div>
 
               <div style={{ height: 10 }} />
 
@@ -787,7 +791,7 @@ export default function ResultClient() {
                 </button>
               }
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで数十秒かかる場合があります。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。</div>
               <div style={{ height: 10 }} />
 
               {speechAiError ? (
