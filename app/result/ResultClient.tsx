@@ -264,6 +264,8 @@ const pillBtn: React.CSSProperties = {
   padding: "6px 10px",
   fontSize: 12,
   background: "#fff",
+  color:"#0f172a",
+  fontWeight:700,
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
