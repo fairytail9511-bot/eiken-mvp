@@ -227,7 +227,7 @@ export default function SettingsPage() {
           <div style={titleStyle}>設定</div>
 
           {/* ===== 面接難易度 ===== */}
-          <div style={sectionTitle}>面接難易度</div>
+          <div style={sectionTitle}>面接難易度（評価基準は一定）</div>
           <div style={segmentedWrap}>
             {[
               { key: "easy", label: "易しい" },

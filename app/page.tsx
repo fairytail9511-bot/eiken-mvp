@@ -67,8 +67,8 @@ export default function HomePage() {
     >
       <div className="w-full max-w-sm rounded-3xl p-6 space-y-6 text-center">
         <div className="space-y-2">
-          <h1 className="text-xl font-bold text-white tracking-wide">
-            英検1級 二次面接AI（MVP v2.0）
+          <h1 className="text-2xl font-bold text-white tracking-wide">
+            英検1級 二次面接AI
           </h1>
           <div className="h-px w-24 mx-auto bg-gradient-to-r from-transparent via-yellow-300/70 to-transparent" />
           <p className="text-sm text-white">今日の1問が合格を近づける。</p>
