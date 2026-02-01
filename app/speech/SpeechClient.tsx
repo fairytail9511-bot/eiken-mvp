@@ -286,8 +286,8 @@ export default function SpeechClient() {
     color: "#fff",
     background:
       isTranscribing || isStarting || isRecording
-        ? "rgba(156,163,175,0.55)"
-        : "linear-gradient(180deg, rgba(17,24,39,0.95) 0%, rgba(2,6,23,0.95) 100%)",
+        ? "rgba(76, 93, 121, 0.55)"
+        : "linear-gradient(180deg, rgba(0, 67, 211, 1) 0%, rgba(0, 16, 95, 1) 100%)",
     cursor: isTranscribing || isStarting || isRecording ? "not-allowed" : "pointer",
     fontWeight: 900,
     boxShadow: "0 10px 18px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)",
@@ -324,9 +324,9 @@ export default function SpeechClient() {
     width: "100%",
     borderRadius: 999,
     border: `1px solid ${gold}`,
-    background: "linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(240,240,240,0.92) 100%)",
+    background: "linear-gradient(180deg, rgba(6, 18, 248, 0.95) 0%, rgba(0, 5, 90, 0.92) 100%)",
     boxShadow: `0 16px 28px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.4)`,
-    color: "#0b1220",
+    color: "#fbfbfbff",
     fontWeight: 900,
     padding: "14px 16px",
     cursor: "pointer",

@@ -159,7 +159,7 @@ export default function MetricPage() {
     const w = 900;
     const h = 360;
     const padL = 44;
-    const padR = 14;
+    const padR = 30;
     const padT = 18;
     const padB = 46;
 
@@ -392,7 +392,7 @@ export default function MetricPage() {
                   {chart.yTicks.map((t: any, idx: number) => (
                     <g key={idx}>
                       <line x1={44} x2={900 - 14} y1={t.y} y2={t.y} stroke={lineSoft} strokeWidth={1} />
-                      <text x={38} y={t.y + 4} fontSize={12} textAnchor="end" fill={textSub}>
+                      <text x={38} y={t.y + 4} fontSize={20} textAnchor="end" fill={textSub}>
                         {t.v}
                       </text>
                     </g>
@@ -416,8 +416,8 @@ export default function MetricPage() {
 
                   {/* points */}
                   {chart.circles.map((c: any) => (
+                    <g key={c.key}>
                     <circle
-                      key={c.key}
                       cx={c.cx}
                       cy={c.cy}
                       r={c.r}
@@ -425,11 +425,26 @@ export default function MetricPage() {
                       stroke="rgba(34,197,94,0.45)"
                       strokeWidth={2}
                     />
+
+                    <text
+                      x={c.cx}
+                      y={c.cy - 14}
+                      textAnchor="middle"
+                      fontSize={18}
+                      fontWeight={800}
+                      fill="#EAB308"
+                      stroke="rgba(0,0,0,0.55)"
+                      strokeWidth={3}
+                      paintOrder="stroke"
+                    >
+                      {Number.isFinite(c.score) ? c.score : ""}
+                      </text>
+                      </g>  
                   ))}
 
                   {/* x labels */}
                   {chart.xLabels.map((xl: any, idx: number) => (
-                    <text key={idx} x={xl.x} y={360 - 22} fontSize={12} textAnchor="middle" fill={textSub}>
+                    <text key={idx} x={xl.x} y={360 - 22} fontSize={18} textAnchor="middle" fill={textSub}>
                       {xl.text}
                     </text>
                   ))}

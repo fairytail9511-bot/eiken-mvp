@@ -775,9 +775,9 @@ export default function QAPage() {
     fontWeight: 900,
     border: "1px solid rgba(234,179,8,0.45)",
     background: canSend
-      ? "linear-gradient(180deg, rgba(30,58,138,0.95), rgba(15,23,42,0.9))"
-      : "linear-gradient(180deg, rgba(148,163,184,0.55), rgba(148,163,184,0.25))",
-    color: "#fff",
+      ? "linear-gradient(180deg, rgba(30, 58, 138, 0.95), rgba(15,23,42,0.9))"
+      : "linear-gradient(180deg, rgba(229, 214, 1, 0.99), rgba(94, 98, 1, 0.25))",
+    color: "#ffffffff",
     cursor: canSend ? "pointer" : "not-allowed",
     boxShadow: canSend ? "0 18px 40px rgba(0,0,0,0.55)" : "0 8px 18px rgba(0,0,0,0.35)",
   };

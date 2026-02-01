@@ -700,8 +700,8 @@ export default function TopicPage() {
                       border: goldBorder,
                       background:
                         isTranscribing || isStarting || isRecording
-                          ? "rgba(148,163,184,0.40)"
-                          : "linear-gradient(180deg, rgba(15,23,42,0.95) 0%, rgba(2,6,23,0.95) 100%)",
+                          ? "rgba(1, 21, 48, 0.65)"
+                          : "linear-gradient(180deg, rgba(5, 68, 216, 0.95) 0%, rgba(3, 10, 39, 0.95) 100%)",
                       color: "rgba(255,255,255,0.92)",
                       padding: "10px 12px",
                       fontWeight: 900,

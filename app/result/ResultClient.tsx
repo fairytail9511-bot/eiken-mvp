@@ -736,7 +736,8 @@ export default function ResultClient() {
                 </div>
               }
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。　　また、1度で再評価されない可能性もありますが、その場合は数度お試しください。</div>
+
 
               <div style={{ height: 10 }} />
 
@@ -780,7 +781,7 @@ export default function ResultClient() {
 
             <Accordion
               icon={<span>🧠</span>}
-              title="Speech構成分析（AI評価1文×4）＋ Speech原文"
+              title="Speech分析"
               right={
                 <button
                   type="button"
@@ -842,7 +843,7 @@ export default function ResultClient() {
               )}
             </Accordion>
 
-            <Accordion icon={<span>🔥</span>} title="Q&A 詰められ耐性分析（回答ログ付き）">
+            <Accordion icon={<span>🔥</span>} title="Q&A 回答ログ（改善例付き）">
               {qaAnalysis.length === 0 ? (
                 <div style={{ fontSize: 13, color: "#374151" }}>（Q&A分析データがありません）</div>
               ) : (
@@ -919,6 +920,8 @@ export default function ResultClient() {
               </button>
             )}
 
+
+            {!fromRecords && (
             <button
               type="button"
               onClick={onClickSave}
@@ -935,6 +938,7 @@ export default function ResultClient() {
             >
               {saveLoading ? "保存中..." : saveDone ? "保存しました" : "保存"}
             </button>
+            )}
           </div>
         </div>
       </div>
