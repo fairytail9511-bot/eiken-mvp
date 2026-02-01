@@ -870,7 +870,6 @@ export default function ResultClient() {
                           <div style={{ marginTop: 6, padding: 10, border: "1px solid rgba(0,0,0,0.12)", borderRadius: 12, background: "#fff", whiteSpace: "pre-wrap" }}>
                             {ex}
                           </div>
-                          <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>※ 改善例は「1問につき1個」の方針です</div>
                         </div>
                       </div>
                     );
