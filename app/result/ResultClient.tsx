@@ -736,7 +736,7 @@ export default function ResultClient() {
                 </div>
               }
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。　　　また、1度で再評価されない可能性もありますが、その場合は数度お試しください。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。　　　　また、1度で再評価されない可能性もありますが、その場合は数度お試しください。</div>
 
 
               <div style={{ height: 10 }} />
