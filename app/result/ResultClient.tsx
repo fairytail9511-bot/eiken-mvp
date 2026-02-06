@@ -736,7 +736,8 @@ export default function ResultClient() {
                 </div>
               }
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。　　　　また、1度で再評価されない可能性もありますがその場合は数度お試しください。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 1度で再評価されない可能性もありますがその場合は数度お試しください。</div>
 
 
               <div style={{ height: 10 }} />
@@ -756,9 +757,9 @@ export default function ResultClient() {
               <Accordion icon={<span>④</span>} title="Pronunciation（推定）" right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bPron)}/10</span>}>
                 <ThreeBlockCard title="Pronunciation" score={bPron} blocks={threeBlocks.pronunciation_fluency} />
                 <div style={{ marginTop: 10, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>
-                  ※ 話速・詰まり・明瞭度などの音声特徴をもとにした参考評価です
+                  ※ 話速・詰まり・明瞭度などの音声特徴をもとにした参考評価です。
                   <br />
-                  ※ 母音・子音の微細な訛りや英語らしさの判断は含みません
+                  ※ 母音・子音の微細な訛りや英語らしさの判断は含みません。
                   <br />
                   ※ 入力のみの場合は発話テキストの流れから推定した参考評価です。
                 </div>
