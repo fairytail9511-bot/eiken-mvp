@@ -159,7 +159,7 @@ export default function MetricPage() {
     const w = 900;
     const h = 360;
     const padL = 44;
-    const padR = 30;
+    const padR = 15;
     const padT = 18;
     const padB = 46;
 
@@ -444,7 +444,7 @@ export default function MetricPage() {
 
                   {/* x labels */}
                   {chart.xLabels.map((xl: any, idx: number) => (
-                    <text key={idx} x={xl.x} y={360 - 22} fontSize={18} textAnchor="middle" fill={textSub}>
+                    <text key={idx} x={xl.x-15} y={360 - 22} fontSize={18} textAnchor="middle" fill={textSub}>
                       {xl.text}
                     </text>
                   ))}
