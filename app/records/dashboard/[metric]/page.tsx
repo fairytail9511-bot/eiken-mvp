@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
 type SavedRecord = {
@@ -31,30 +30,25 @@ const METRIC_LABEL: Record<string, string> = {
 
 type RangeKey = "1m" | "3m" | "6m" | "all";
 
-function clamp(n: number, min: number, max: number) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return min;
-  return Math.max(min, Math.min(max, x));
-}
-
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
-function formatMd(d: Date) {
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
-function getDifficultyLabel(session: any) {
-  const v = String(session?.difficulty ?? session?.settings?.difficulty ?? "").toLowerCase();
-  if (v === "easy") return "易";
-  if (v === "real") return "本";
-  if (v === "hard") return "圧";
-  return "-";
-}
-
 function startOfDay(d: Date) {
   const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+function endOfDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function startOfMonth(d: Date) {
+  const x = new Date(d);
+  x.setDate(1);
   x.setHours(0, 0, 0, 0);
   return x;
 }
@@ -65,13 +59,35 @@ function addMonths(d: Date, months: number) {
   return x;
 }
 
+function clamp(n: number, min: number, max: number) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function getDifficultyLabel(session: any) {
+  const v = String(session?.difficulty ?? session?.settings?.difficulty ?? "").toLowerCase();
+  if (v === "easy") return "易";
+  if (v === "real") return "本";
+  if (v === "hard") return "圧";
+  return "-";
+}
+
+function formatMonthLabel(d: Date) {
+  return `${d.getMonth() + 1}月`;
+}
+
+function formatDayLabel(d: Date) {
+  return `${d.getDate()}`;
+}
+
 export default function MetricPage() {
   const params = useParams();
   const router = useRouter();
   const metric = params.metric as string;
 
   const [records, setRecords] = useState<SavedRecord[]>([]);
-  const [range, setRange] = useState<RangeKey>("all");
+  const [range, setRange] = useState<RangeKey>("3m");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -90,62 +106,83 @@ export default function MetricPage() {
   }, []);
 
   const maxScore = metric === "total" ? 40 : 10;
+  const title = METRIC_LABEL[metric] ?? "評価";
 
-  const filteredByRange = useMemo(() => {
+  // ✅ 1ヶ月だけラベル表示、それ以外は非表示
+  const showDenseLabels = range === "1m";
+
+  // ===== 期間（当月含む） =====
+  const rangeWindow = useMemo(() => {
+    const now = new Date();
+    const thisMonthStart = startOfMonth(now);
+
+    let from = thisMonthStart;
+    if (range === "1m") from = thisMonthStart;
+    if (range === "3m") from = addMonths(thisMonthStart, -2);
+    if (range === "6m") from = addMonths(thisMonthStart, -5);
+
+    const to = endOfDay(now);
+
+    if (range === "all") {
+      const times = (records ?? [])
+        .map((r) => new Date(r.savedAt).getTime())
+        .filter((t) => Number.isFinite(t));
+      if (times.length === 0) return { from: thisMonthStart, to };
+      const minT = Math.min(...times);
+      const minD = new Date(minT);
+      return { from: startOfMonth(minD), to };
+    }
+
+    return { from, to };
+  }, [range, records]);
+
+  // ===== “日付軸”上に、面接した日の点だけ載せる =====
+  const points = useMemo(() => {
     const src = Array.isArray(records) ? records : [];
     if (src.length === 0) return [];
 
-    const now = new Date();
-    const from =
-      range === "all"
-        ? null
-        : range === "1m"
-        ? addMonths(now, -1)
-        : range === "3m"
-        ? addMonths(now, -3)
-        : addMonths(now, -6);
-
-    if (!from) return src;
-
-    const fromMs = startOfDay(from).getTime();
-    return src.filter((r) => {
-      const t = new Date(r.savedAt).getTime();
-      return Number.isFinite(t) && t >= fromMs;
-    });
-  }, [records, range]);
-
-  const points = useMemo(() => {
     const metricKey = metric as keyof SavedRecord["breakdown"];
+    const fromMs = rangeWindow.from.getTime();
+    const toMs = rangeWindow.to.getTime();
 
-    const sorted = filteredByRange
-      .slice()
-      .sort((a, b) => new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime());
+    const inRange = src.filter((r) => {
+      const t = new Date(r.savedAt).getTime();
+      return Number.isFinite(t) && t >= fromMs && t <= toMs;
+    });
 
-    const seenDay = new Set<string>();
-    const uniquePerDay: SavedRecord[] = [];
-    for (const r of sorted) {
-      const d = new Date(r.savedAt);
+    // 同日複数は最新のみ
+    const byDay = new Map<string, SavedRecord>();
+    for (const r of inRange) {
+      const d = startOfDay(new Date(r.savedAt));
       const key = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-      if (seenDay.has(key)) continue;
-      seenDay.add(key);
-      uniquePerDay.push(r);
+      const prev = byDay.get(key);
+      if (!prev) {
+        byDay.set(key, r);
+      } else {
+        const a = new Date(prev.savedAt).getTime();
+        const b = new Date(r.savedAt).getTime();
+        if (b >= a) byDay.set(key, r);
+      }
     }
 
-    return uniquePerDay.map((r) => {
-      const d = new Date(r.savedAt);
-      const scoreRaw = metric === "total" ? r.total : r.breakdown?.[metricKey];
-      const score = Number(scoreRaw) || 0;
+    return Array.from(byDay.entries())
+      .map(([key, r]) => {
+        const d = new Date(r.savedAt);
+        const day = startOfDay(d);
 
-      const diff = getDifficultyLabel(r.session);
-      const label = `${formatMd(d)}(${diff})`;
+        const scoreRaw = metric === "total" ? r.total : r.breakdown?.[metricKey];
+        const score = Number(scoreRaw) || 0;
 
-      return {
-        xDate: startOfDay(d).getTime(),
-        score,
-        label,
-      };
-    });
-  }, [filteredByRange, metric]);
+        return {
+          key,
+          xDate: day.getTime(),
+          dateObj: day,
+          score,
+          diff: getDifficultyLabel(r.session),
+        };
+      })
+      .sort((a, b) => a.xDate - b.xDate);
+  }, [records, metric, rangeWindow]);
 
   const avg = useMemo(() => {
     if (points.length === 0) return 0;
@@ -153,36 +190,23 @@ export default function MetricPage() {
     return Math.round((sum / points.length) * 10) / 10;
   }, [points]);
 
-  const title = METRIC_LABEL[metric] ?? "評価";
-
+  // ===== チャート計算（“期間のfrom〜to” をX軸に固定） =====
   const chart = useMemo(() => {
-    const w = 900;
-    const h = 360;
-    const padL = 44;
-    const padR = 15;
-    const padT = 18;
-    const padB = 46;
+    const w = 700;
+    const h = 1000;
+    const padL = 64;
+    const padR = 18;
+    const padT = 54;
+    const padB = 62;
 
     const innerW = w - padL - padR;
     const innerH = h - padT - padB;
 
-    if (points.length === 0) {
-      return {
-        w,
-        h,
-        viewBox: `0 0 ${w} ${h}`,
-        pathD: "",
-        circles: [],
-        xLabels: [],
-        yTicks: [] as any[],
-      };
-    }
-
     const yMin = 0;
     const yMax = maxScore;
 
-    const xMin = Math.min(...points.map((p) => p.xDate));
-    const xMax = Math.max(...points.map((p) => p.xDate));
+    const xMin = rangeWindow.from.getTime();
+    const xMax = rangeWindow.to.getTime();
 
     const xScale = (x: number) => {
       if (xMax === xMin) return padL + innerW / 2;
@@ -193,29 +217,30 @@ export default function MetricPage() {
       return padT + (1 - (yy - yMin) / (yMax - yMin)) * innerH;
     };
 
+    // 月境界（縦線）+ 月ラベル
+    const monthLines: { x: number; label: string }[] = [];
+    const m0 = startOfMonth(rangeWindow.from);
+    for (let cur = new Date(m0); cur.getTime() <= xMax; cur = addMonths(cur, 1)) {
+      const ms = cur.getTime();
+      const x = xScale(ms);
+      monthLines.push({ x, label: formatMonthLabel(cur) });
+    }
+
     const pts = points.map((p) => ({
       x: xScale(p.xDate),
       y: yScale(p.score),
-      label: p.label,
       score: p.score,
+      dateObj: p.dateObj,
+      diff: p.diff,
+      key: p.key,
     }));
 
-    const pathD = pts
-      .map((p, i) => {
-        const cmd = i === 0 ? "M" : "L";
-        return `${cmd} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
-      })
-      .join(" ");
+    const pathD =
+      pts.length === 0
+        ? ""
+        : pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
 
-    const circles = pts.map((p, i) => ({
-      key: `${i}`,
-      cx: p.x,
-      cy: p.y,
-      r: 4,
-      label: p.label,
-      score: p.score,
-    }));
-
+    // Y目盛
     const steps = 5;
     const yTicks = Array.from({ length: steps + 1 }).map((_, i) => {
       const v = Math.round((yMax / steps) * i);
@@ -223,126 +248,175 @@ export default function MetricPage() {
       return { v, y };
     });
 
-    const maxLabels = 8;
-    const every = Math.max(1, Math.ceil(points.length / maxLabels));
-    const xLabels = pts
-      .map((p, i) => ({ x: p.x, text: points[i].label }))
+    // X（日付）ラベル：表示するのは1ヶ月のときだけ（間引き）
+    const maxDayLabels = 8;
+    const every = Math.max(1, Math.ceil(pts.length / maxDayLabels));
+    const dayLabels = pts
+      .map((p, i) => ({ x: p.x, text: formatDayLabel(p.dateObj) }))
       .filter((_, i) => i % every === 0 || i === pts.length - 1);
 
     return {
       w,
       h,
       viewBox: `0 0 ${w} ${h}`,
-      pathD,
-      circles,
-      xLabels,
+      padL,
+      padR,
+      padT,
+      padB,
       yTicks,
+      monthLines,
+      pts,
+      pathD,
+      dayLabels,
     };
-  }, [points, maxScore]);
+  }, [points, maxScore, rangeWindow]);
 
   // ===== Theme =====
   const gold = "rgba(234, 179, 8, 0.70)";
-  const goldStrong = "rgba(234, 179, 8, 0.85)";
+  const goldStrong = "rgba(234, 179, 8, 0.90)";
   const glass = "rgba(255,255,255,0.08)";
-  const glass2 = "rgba(255,255,255,0.10)";
-  const lineSoft = "rgba(255,255,255,0.18)";
-  const textSoft = "rgba(255,255,255,0.88)";
+  const lineSoft = "rgba(255,255,255,0.16)";
   const textSub = "rgba(255,255,255,0.72)";
 
   const pageStyle: React.CSSProperties = {
-    minHeight: "100vh",
+    height: "100vh",
     display: "flex",
-    background:
-      "#070a12",
     justifyContent: "center",
+    background: "#030b20ff",
     padding: 0,
+    overflow: "hidden",
   };
 
   const shell: React.CSSProperties = {
     width: "100%",
     maxWidth: 520,
-    minHeight: "100vh",
-    padding: 16,
+    height: "100vh",
+    padding: 10,
     display: "flex",
     flexDirection: "column",
-    gap: 14,
+    gap: 8,
+    overflow: "hidden",
+  };
+
+  const topRow: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    flex: "none",
   };
 
   const titleStyle: React.CSSProperties = {
     fontSize: 28,
     fontWeight: 900,
-    letterSpacing: 1,
+    letterSpacing: 0.5,
     color: "white",
-    marginTop: 4,
+    margin: 0,
+    lineHeight: 1.1,
   };
+
+  const smallNavRow: React.CSSProperties = {
+    display: "flex",
+    gap: 8,
+    flex: "none",
+  };
+
+  const smallNavBtn: React.CSSProperties = {
+    borderRadius: 12,
+    border: `1px solid ${gold}`,
+    background: "rgba(255,255,255,0.06)",
+    color: "white",
+    padding: "7px 10px",
+    fontWeight: 900,
+    fontSize: 12,
+    cursor: "pointer",
+    boxShadow: "0 10px 18px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.06)",
+    whiteSpace: "nowrap",
+  };
+
+  const rangeRow: React.CSSProperties = {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, 1fr)",
+    gap: 8,
+    flex: "none",
+  };
+
+  const rangeBtn = (active: boolean): React.CSSProperties => ({
+    borderRadius: 12,
+    border: `1px solid ${active ? goldStrong : "rgba(255,255,255,0.18)"}`,
+    background: active ? "rgba(3, 7, 255, 0.45)" : "rgba(255,255,255,0.06)",
+    color: active ? "white" : "rgba(255,255,255,0.88)",
+    padding: "10px 6px",
+    fontWeight: 900,
+    fontSize: 14,
+    cursor: "pointer",
+    boxShadow: active ? "0 10px 18px rgba(0,0,0,0.45)" : "inset 0 0 0 1px rgba(255,255,255,0.04)",
+    whiteSpace: "nowrap",
+  });
 
   const panel: React.CSSProperties = {
     borderRadius: 20,
     border: `1px solid ${gold}`,
     background: glass,
     boxShadow: `0 18px 44px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.05)`,
-    padding: 16,
+    padding: 10,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    flex: "1 1 auto",
+    overflow: "hidden",
+    minHeight: 0,
   };
-
-  const rangeRow: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
-    gap: 10,
-  };
-
-  const rangeBtn = (active: boolean): React.CSSProperties => ({
-    borderRadius: 12,
-    border: `1px solid ${active ? goldStrong : "rgba(255,255,255,0.18)"}`,
-    background: active ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.06)",
-    color: active ? "white" : textSoft,
-    padding: "10px 8px",
-    fontWeight: 900,
-    fontSize: 16,
-    cursor: "pointer",
-    boxShadow: active ? "0 10px 18px rgba(0,0,0,0.45)" : "inset 0 0 0 1px rgba(255,255,255,0.04)",
-    whiteSpace: "nowrap",
-  });
 
   const chartWrap: React.CSSProperties = {
     borderRadius: 18,
     border: `1px solid ${gold}`,
     background: "rgba(0,0,0,0.25)",
     boxShadow: `inset 0 0 0 1px rgba(255,255,255,0.06)`,
-    padding: 12,
+    padding: 8,
     overflow: "hidden",
+    flex: "1 1 auto",
+    minHeight: 0,
+    display: "flex",
   };
 
-  const avgStyle: React.CSSProperties = {
-    fontSize: 30,
-    fontWeight: 900,
+  const avgRow: React.CSSProperties = {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: "0 2px",
+    flex: "none",
+  };
+
+  const avgLabel: React.CSSProperties = {
     color: goldStrong,
-    letterSpacing: 1,
-    marginTop: 2,
-  };
-
-  const bigBtn: React.CSSProperties = {
-    width: "100%",
-    borderRadius: 18,
-    border: `1px solid ${gold}`,
-    background: glass2,
-    color: "white",
-    textAlign:"center",
-    padding: "18px 16px",
     fontWeight: 900,
     fontSize: 20,
-    cursor: "pointer",
-    boxShadow: "0 16px 30px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.07)",
   };
 
-  const bigBtnSub: React.CSSProperties = {
-    ...bigBtn,
-    color: textSoft,
+  const avgValue: React.CSSProperties = {
+    fontSize: 25,
+    fontWeight: 900,
+    color: goldStrong,
+    letterSpacing: 0.5,
   };
 
   return (
     <main style={pageStyle}>
       <div style={shell}>
-        <div style={titleStyle}>{title}</div>
+        <div style={topRow}>
+          <div style={titleStyle}>{title}</div>
+
+          <div style={smallNavRow}>
+            <button type="button" onClick={() => router.push("/")} style={smallNavBtn}>
+              トップ画面へ戻る
+            </button>
+            <button type="button" onClick={() => router.back()} style={smallNavBtn}>
+              戻る
+            </button>
+          </div>
+        </div>
 
         {error ? (
           <div
@@ -354,6 +428,7 @@ export default function MetricPage() {
               padding: 12,
               fontSize: 13,
               whiteSpace: "pre-wrap",
+              flex: "none",
             }}
           >
             {error}
@@ -386,92 +461,138 @@ export default function MetricPage() {
             {points.length === 0 ? (
               <div style={{ fontSize: 14, color: textSub }}>データがありません。</div>
             ) : (
-              <div style={{ width: "100%", overflowX: "auto" }}>
-                <svg width="100%" viewBox={chart.viewBox} role="img" aria-label="score chart" style={{ minWidth: 520 }}>
-                  {/* grid + y labels */}
-                  {chart.yTicks.map((t: any, idx: number) => (
-                    <g key={idx}>
-                      <line x1={44} x2={900 - 14} y1={t.y} y2={t.y} stroke={lineSoft} strokeWidth={1} />
-                      <text x={38} y={t.y + 4} fontSize={20} textAnchor="end" fill={textSub}>
-                        {t.v}
-                      </text>
-                    </g>
-                  ))}
-
-                  {/* axes */}
-                  <line x1={44} x2={44} y1={18} y2={360 - 46} stroke={lineSoft} strokeWidth={1} />
-                  <line x1={44} x2={900 - 14} y1={360 - 46} y2={360 - 46} stroke={lineSoft} strokeWidth={1} />
-
-                  {/* subtle area */}
-                  {chart.pathD ? (
-                    <path
-                      d={`${chart.pathD} L ${900 - 14} ${360 - 46} L 44 ${360 - 46} Z`}
-                      fill="rgba(34,197,94,0.18)"
-                      stroke="none"
+              <svg
+                width="100%"
+                height="100%"
+                viewBox={chart.viewBox}
+                role="img"
+                aria-label="score chart"
+                style={{ width: "100%", height: "100%", display: "block" }}
+                preserveAspectRatio="xMidYMid meet"
+              >
+                {/* month vertical lines + month labels */}
+                {chart.monthLines.map((m, idx) => (
+                  <g key={idx}>
+                    <line
+                      x1={m.x}
+                      x2={m.x}
+                      y1={chart.padT}
+                      y2={chart.h - chart.padB}
+                      stroke="rgba(255,255,255,0.10)"
+                      strokeWidth={1}
                     />
-                  ) : null}
+                    <text
+                      x={m.x + 4}
+                      y={chart.padT - 18}
+                      fontSize={27}
+                      fill="rgba(255,255,255,0.60)"
+                    >
+                      {m.label}
+                    </text>
+                  </g>
+                ))}
 
-                  {/* line */}
-                  <path d={chart.pathD} fill="none" stroke="rgba(34,197,94,0.80)" strokeWidth={3} />
+                {/* y grid + labels */}
+                {chart.yTicks.map((t, idx) => (
+                  <g key={idx}>
+                    <line
+                      x1={chart.padL}
+                      x2={chart.w - chart.padR}
+                      y1={t.y}
+                      y2={t.y}
+                      stroke={lineSoft}
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={chart.padL - 10}
+                      y={t.y + 5}
+                      fontSize={27}
+                      textAnchor="end"
+                      fill={textSub}
+                    >
+                      {t.v}
+                    </text>
+                  </g>
+                ))}
 
-                  {/* points */}
-                  {chart.circles.map((c: any) => (
-                    <g key={c.key}>
+                {/* axes */}
+                <line
+                  x1={chart.padL}
+                  x2={chart.padL}
+                  y1={chart.padT}
+                  y2={chart.h - chart.padB}
+                  stroke={lineSoft}
+                  strokeWidth={1}
+                />
+                <line
+                  x1={chart.padL}
+                  x2={chart.w - chart.padR}
+                  y1={chart.h - chart.padB}
+                  y2={chart.h - chart.padB}
+                  stroke={lineSoft}
+                  strokeWidth={1}
+                />
+
+                {/* line */}
+                {chart.pathD ? (
+                  <path d={chart.pathD} fill="none" stroke="rgba(34,197,94,0.85)" strokeWidth={3} />
+                ) : null}
+
+                {/* points (+ score labels only when 1m) */}
+                {chart.pts.map((p) => (
+                  <g key={p.key}>
                     <circle
-                      cx={c.cx}
-                      cy={c.cy}
-                      r={c.r}
+                      cx={p.x}
+                      cy={p.y}
+                      r={4}
                       fill="rgba(34,197,94,0.92)"
                       stroke="rgba(34,197,94,0.45)"
                       strokeWidth={2}
                     />
-
-                    <text
-                      x={c.cx}
-                      y={c.cy - 14}
-                      textAnchor="middle"
-                      fontSize={18}
-                      fontWeight={800}
-                      fill="#EAB308"
-                      stroke="rgba(0,0,0,0.55)"
-                      strokeWidth={3}
-                      paintOrder="stroke"
-                    >
-                      {Number.isFinite(c.score) ? c.score : ""}
+                    {showDenseLabels ? (
+                      <text
+                        x={p.x}
+                        y={p.y - 14}
+                        textAnchor="middle"
+                        fontSize={25}
+                        fontWeight={800}
+                        fill="#EAB308"
+                        stroke="rgba(0,0,0,0.55)"
+                        strokeWidth={3}
+                        paintOrder="stroke"
+                      >
+                        {Number.isFinite(p.score) ? p.score : ""}
                       </text>
-                      </g>  
-                  ))}
+                    ) : null}
+                  </g>
+                ))}
 
-                  {/* x labels */}
-                  {chart.xLabels.map((xl: any, idx: number) => (
-                    <text key={idx} x={xl.x-15} y={360 - 22} fontSize={18} textAnchor="middle" fill={textSub}>
-                      {xl.text}
-                    </text>
-                  ))}
-                </svg>
-              </div>
+                {/* day labels only when 1m */}
+                {showDenseLabels
+                  ? chart.dayLabels.map((d, idx) => (
+                      <text
+                        key={idx}
+                        x={d.x}
+                        y={chart.h - 24}
+                        fontSize={22}
+                        textAnchor="middle"
+                        fill={textSub}
+                      >
+                        {d.text}
+                      </text>
+                    ))
+                  : null}
+              </svg>
             )}
           </div>
 
-          <div style={{ marginTop: 14, color: goldStrong, fontWeight: 900, fontSize: 18 }}>
-            平均点：
-            <span style={{ ...avgStyle }}>
+          <div style={avgRow}>
+            <div style={avgLabel}>平均点</div>
+            <div style={avgValue}>
               {avg}
               {metric === "total" ? " / 40" : " / 10"}
-            </span>
+            </div>
           </div>
-        </div>
-
-        <div style={panel}>
-          <Link href="/" style={{ textDecoration: "none" }}>
-            <div style={bigBtn}>トップ画面に戻る</div>
-          </Link>
-
-          <div style={{ height: 12 }} />
-
-          <button type="button" onClick={() => router.back()} style={bigBtnSub}>
-            戻る
-          </button>
         </div>
       </div>
     </main>

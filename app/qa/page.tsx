@@ -493,7 +493,8 @@ export default function QAPage() {
     });
 
     const j = (await r.json()) as { ok?: boolean; example?: string; error?: string };
-    if (!r.ok || !j?.ok || !j?.example) throw new Error(j?.error ?? "Failed to generate improvement example");
+    if (!r.ok || !j?.ok || !j?.example)
+      throw new Error(j?.error ?? "Failed to generate improvement example");
     return String(j.example).trim();
   }
 
@@ -722,7 +723,11 @@ export default function QAPage() {
   };
 
   const labelExaminerStyle: React.CSSProperties = { fontWeight: 800, marginRight: 10 };
-  const labelYouStyle: React.CSSProperties = { fontWeight: 800, marginRight: 10, color: "rgba(234,179,8,0.95)" };
+  const labelYouStyle: React.CSSProperties = {
+    fontWeight: 800,
+    marginRight: 10,
+    color: "rgba(234,179,8,0.95)",
+  };
 
   const controlsStyle: React.CSSProperties = {
     ...cardGold,
@@ -793,6 +798,32 @@ export default function QAPage() {
     flex: "none",
   };
 
+  const escapeCardStyle: React.CSSProperties = {
+    borderTop: "1px solid rgba(255,255,255,0.14)",
+    paddingTop: 10,
+    fontSize: 12,
+    lineHeight: 1.6,
+    color: "rgba(255,255,255,0.78)",
+    whiteSpace: "pre-wrap",
+  };
+
+  const goTopBtnStyle: React.CSSProperties = {
+    marginTop: 8,
+    width: "100%",
+    borderRadius: 14,
+    padding: "12px 14px",
+    fontWeight: 900,
+    border: "1px solid rgba(234,179,8,0.35)",
+    background: "rgba(255,255,255,0.06)",
+    color: "#fff",
+    cursor: "pointer",
+    boxShadow: "0 10px 22px rgba(0,0,0,0.40)",
+  };
+
+  function onGoTop() {
+    router.push("/");
+  }
+
   return (
     <main style={containerStyle}>
       <div style={phoneStyle}>
@@ -804,7 +835,7 @@ export default function QAPage() {
               alt="Examiner"
               width={900}
               height={900}
-              style={{ width: "100%", height: "140%",objectFit: "cover",display: "block" }}
+              style={{ width: "100%", height: "140%", objectFit: "cover", display: "block" }}
               priority
             />
           </div>
@@ -867,7 +898,7 @@ export default function QAPage() {
 
           <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 12 }}>
             {statusText}
-            {qIndex >= 0 && qIndex <= 3 ? `（Q${qIndex + 1}/4）` : isDone ? "（完了）" : ""}
+            {qIndex >= 0 && qIndex <= 3 ? `（Q${qIndex + 1}/4）` : isDone ? "（1~2分程度かかります）" : ""}
           </div>
 
           {!isDone ? (
@@ -928,6 +959,30 @@ export default function QAPage() {
               {loadingScore ? "採点中..." : "採点へ"}
             </button>
           )}
+
+          {/* ===== Escape hatch (UI only) ===== */}
+          <div style={escapeCardStyle}>
+            {"※音声が出ない場合でも、録音と採点は可能です。そのまま継続してください。\n"}
+            {"※「トップ画面へ戻る」を押すと、このページの途中経過は消えます。"}
+          </div>
+
+          <button type="button" 
+          onClick={onGoTop} 
+          style={{
+              width: "100%",
+              borderRadius: 14,
+              border: "1px solid rgba(234,179,8,0.55)",
+              padding: "12px 14px",
+              fontWeight: 900,
+              color: "#fff",
+              background:
+                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
+              cursor: "pointer",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+            }}
+            >
+            トップ画面へ戻る
+          </button>
         </div>
       </div>
     </main>

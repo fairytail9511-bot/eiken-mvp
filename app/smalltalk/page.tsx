@@ -523,6 +523,10 @@ export default function SmalltalkPage() {
     router.push("/topic");
   }
 
+  function onGoTop() {
+    router.push("/");
+  }
+
   const micDisabled = busy || phase === "ready_to_start" || isTranscribing || isStarting || isRecording;
 
   const canSend =
@@ -538,7 +542,6 @@ export default function SmalltalkPage() {
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
-    // 最新が見える位置へ
     el.scrollTop = el.scrollHeight;
   }, [logs.length]);
 
@@ -549,14 +552,15 @@ export default function SmalltalkPage() {
   const panelBg2 = "rgba(255,255,255,0.08)";
   const panelBorder = "rgba(255,255,255,0.14)";
 
+  // ✅ ページ全体は “今まで通りスクロール可” のまま（minHeight）
   const rootStyle: React.CSSProperties = {
     minHeight: "100vh",
-    background: "radial-gradient(1200px 800px at 50% 0%, rgba(30,58,138,0.30) 0%, rgba(2,6,23,1) 55%, rgba(0,0,0,1) 100%)",
+    background:
+      "radial-gradient(1200px 800px at 50% 0%, rgba(30,58,138,0.30) 0%, rgba(2,6,23,1) 55%, rgba(0,0,0,1) 100%)",
     color: "#fff",
   };
 
   const shellStyle: React.CSSProperties = {
-    height: "100vh",
     width: "100%",
     maxWidth: 520,
     margin: "0 auto",
@@ -566,23 +570,26 @@ export default function SmalltalkPage() {
     gap: 12,
   };
 
+  // ✅ アバターを大きすぎないよう調整（上限を入れる）
   const avatarWrapStyle: React.CSSProperties = {
-  flex: "0 0 33vh",
-  minHeight: 220,
-  borderRadius: 18,
-  padding: 10, // ←内枠用の余白
-  border: `1px solid ${gold}`, // 外枠の金
-  background: "rgba(0,0,0,0.35)",
-  boxShadow: "0 18px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08)",
-};
+    height: "min(30vh, 250px)",
+    minHeight: 200,
+    borderRadius: 18,
+    padding: 10,
+    border: `1px solid ${gold}`,
+    background: "rgba(0,0,0,0.35)",
+    boxShadow: "0 18px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08)",
+  };
 
+  // ✅ 会話ブロックだけスクロール（ページスクロールも残す）
   const chatWrapStyle: React.CSSProperties = {
-    flex: "1 1 auto",
     borderRadius: 16,
     border: `1px solid ${panelBorder}`,
     background: panelBg,
     overflow: "hidden",
     boxShadow: "0 10px 40px rgba(0,0,0,0.35)",
+    // ここが肝：会話領域の高さを固定し、内部だけスクロールさせる
+    height: "min(34vh, 320px)",
   };
 
   const chatInnerStyle: React.CSSProperties = {
@@ -592,11 +599,10 @@ export default function SmalltalkPage() {
     display: "flex",
     flexDirection: "column",
     gap: 10,
+    WebkitOverflowScrolling: "touch",
   };
 
   const bottomWrapStyle: React.CSSProperties = {
-    flex: "0 0 25vh",
-    minHeight: 170,
     borderRadius: 16,
     border: `1px solid ${panelBorder}`,
     background: panelBg2,
@@ -629,48 +635,39 @@ export default function SmalltalkPage() {
   return (
     <main style={rootStyle}>
       <div style={shellStyle}>
-        {/* ====== Avatar fixed ====== */}
+        {/* ====== Avatar ====== */}
         <div style={avatarWrapStyle}>
-  <div
-    style={{
-      width: "100%",
-      height: "100%",
-      borderRadius: 14,
-      overflow: "hidden",
-      border: `1px solid ${goldStrong}`, // 内枠の金（少し強め）
-      background: "rgba(255,255,255,0.04)",
-    }}
-  >
-    <Image
-      src={isExaminerSpeaking ? AVATAR_EXAMINER_OPEN : AVATAR_EXAMINER_CLOSED}
-      alt="Examiner"
-      width={900}
-      height={900}
-      style={{ width: "100%", height: "145%", objectFit: "cover", display: "block" }}
-      priority
-    />
-  </div>
-</div>
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              borderRadius: 14,
+              overflow: "hidden",
+              border: `1px solid ${goldStrong}`,
+              background: "rgba(255,255,255,0.04)",
+            }}
+          >
+            <Image
+              src={isExaminerSpeaking ? AVATAR_EXAMINER_OPEN : AVATAR_EXAMINER_CLOSED}
+              alt="Examiner"
+              width={900}
+              height={900}
+              style={{ width: "100%", height: "145%", objectFit: "cover", display: "block" }}
+              priority
+            />
+          </div>
+        </div>
 
-        {/* ====== Chat scroll only ====== */}
+        {/* ====== Chat (scroll only inside) ====== */}
         <div style={chatWrapStyle}>
           <div ref={chatScrollRef} style={chatInnerStyle}>
             {!showTranscript ? (
-              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)" }}>
-                （会話表示がOFFです）
-              </div>
+              <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)" }}>（会話表示がOFFです）</div>
             ) : (
               logs.map((m, i) => {
                 const isExam = m.role === "examiner";
                 return (
-                  <div
-                    key={i}
-                    style={{
-                      display: "flex",
-                      gap: 10,
-                      alignItems: "flex-start",
-                    }}
-                  >
+                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                     <div
                       style={{
                         minWidth: 78,
@@ -718,7 +715,7 @@ export default function SmalltalkPage() {
           </div>
         </div>
 
-        {/* ====== Bottom fixed controls ====== */}
+        {/* ====== Bottom controls ====== */}
         <div style={bottomWrapStyle}>
           {recError && (
             <div
@@ -775,10 +772,10 @@ export default function SmalltalkPage() {
                   {isStarting
                     ? "起動中…"
                     : isRecording
-                    ? "録音中…（Stopで終了→自動送信）"
-                    : isTranscribing
-                    ? "文字起こし中…"
-                    : "待機中"}
+                      ? "録音中…（Stopで終了→自動送信）"
+                      : isTranscribing
+                        ? "文字起こし中…"
+                        : "待機中"}
                   {"  "}
                   <span style={{ color: "rgba(234,179,8,0.9)" }}>
                     {phase === "volume" && "（まず音量チェックに回答）"}
@@ -840,6 +837,43 @@ export default function SmalltalkPage() {
               Start（Topicへ）
             </button>
           )}
+
+          {/* ===== Escape hatch (UI only) ===== */}
+          <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div
+              style={{
+                borderTop: `1px solid ${panelBorder}`,
+                paddingTop: 10,
+                fontSize: 12,
+                lineHeight: 1.55,
+                color: "rgba(255,255,255,0.78)",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {"音声が出ない場合でも、録音と採点はできます。無音のままでも継続してください。\n"}
+              {"※「トップ画面へ戻る」を押すと、このページの途中経過は消えます。"}
+            </div>
+
+            <button
+              type="button"
+              onClick={onGoTop}
+              style={{
+                ...btnSub,
+                width: "100%",
+              borderRadius: 14,
+              border: "1px solid rgba(234,179,8,0.55)",
+              padding: "12px 14px",
+              fontWeight: 900,
+              color: "#fff",
+              background:
+                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
+              cursor: "pointer",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+              }}
+            >
+              トップ画面へ戻る
+            </button>
+          </div>
         </div>
       </div>
     </main>

@@ -487,7 +487,8 @@ export default function TopicPage() {
     cursor: "pointer",
   };
 
-  const selectedButtonBg = "linear-gradient(180deg, rgba(234,179,8,0.28) 0%, rgba(234,179,8,0.16) 60%, rgba(255,255,255,0.08) 100%)";
+  const selectedButtonBg =
+    "linear-gradient(180deg, rgba(234,179,8,0.28) 0%, rgba(234,179,8,0.16) 60%, rgba(255,255,255,0.08) 100%)";
 
   const clamp3: React.CSSProperties = {
     display: "-webkit-box",
@@ -495,6 +496,14 @@ export default function TopicPage() {
     WebkitBoxOrient: "vertical",
     overflow: "hidden",
   };
+
+  /* =======================
+     Return
+  ======================= */
+
+  function onGoTop() {
+    router.push("/");
+  }
 
   return (
     <main style={pageBg}>
@@ -521,7 +530,7 @@ export default function TopicPage() {
               alt="Examiner"
               width={900}
               height={900}
-              style={{ width: "100%", height: "140%",objectFit: "cover",display: "block" }}
+              style={{ width: "100%", height: "140%", objectFit: "cover", display: "block" }}
               priority
             />
           </div>
@@ -668,7 +677,6 @@ export default function TopicPage() {
                   </button>
                 );
               })}
-
           </div>
 
           {/* Ask phase controls (bottom inside card) */}
@@ -689,7 +697,15 @@ export default function TopicPage() {
                   background: "rgba(255,255,255,0.06)",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
                   <button
                     type="button"
                     onClick={startRecording}
@@ -785,6 +801,53 @@ export default function TopicPage() {
               )}
             </div>
           )}
+        </div>
+
+        {/* =========================
+           🔽 Escape UI 追加部分（Middle card の外）
+        ========================== */}
+        <div
+          style={{
+            marginTop: 12,
+            border: "1px solid rgba(255,255,255,0.14)",
+            borderRadius: 14,
+            padding: 12,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              lineHeight: 1.6,
+              color: "rgba(255,255,255,0.78)",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {"音声が出ない場合でも、録音と採点は可能です。そのまま継続してください。\n"}
+            {"※「トップ画面へ戻る」を押すと、このページの途中経過は消えます。"}
+          </div>
+
+          <button
+            type="button"
+            onClick={onGoTop}
+            style={{
+              width: "100%",
+              borderRadius: 14,
+              border: "1px solid rgba(234,179,8,0.55)",
+              padding: "12px 14px",
+              fontWeight: 900,
+              color: "#fff",
+              background:
+                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
+              cursor: "pointer",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+            }}
+          >
+            トップ画面へ戻る
+          </button>
         </div>
       </div>
     </main>

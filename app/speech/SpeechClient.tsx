@@ -1,6 +1,6 @@
 // app/speech/SpeechClient.tsx
-"use client";  
- 
+"use client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
@@ -470,6 +470,10 @@ export default function SpeechClient() {
     router.push("/qa");
   }
 
+  function onGoTop() {
+    router.push("/");
+  }
+
   const canSubmit = !isStarting && !isTranscribing && (speech ?? "").trim().length > 0;
 
   return (
@@ -644,6 +648,48 @@ export default function SpeechClient() {
               {error}
             </div>
           )}
+
+          {/* ===== Escape hatch (UI only) ===== */}
+          <div
+            style={{
+              ...smallCard,
+              marginTop: 6,
+              background: "rgba(0,0,0,0.26)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                lineHeight: 1.6,
+                color: "rgba(255,255,255,0.78)",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {"音声が出ない場合でも、録音と採点は可能です。そのまま継続してください。\n"}
+              {"※「トップ画面へ戻る」を押すと、このページの途中経過は消えます。"}
+            </div>
+
+            <div style={{ height: 10 }} />
+
+            <button
+              type="button"
+              onClick={onGoTop}
+              style={{
+              width: "100%",
+              borderRadius: 14,
+              border: "1px solid rgba(234,179,8,0.55)",
+              padding: "12px 14px",
+              fontWeight: 900,
+              color: "#fff",
+              background:
+                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
+              cursor: "pointer",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+            }}
+            >
+              トップ画面へ戻る
+            </button>
+          </div>
         </div>
       </div>
     </main>
