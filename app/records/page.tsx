@@ -1,58 +1,101 @@
+// app/records/page.tsx
 "use client";
 
 import Link from "next/link";
-import React from "react";
+import { useEffect, useState } from "react";
+
+function getIsPro(): boolean {
+  try {
+    return localStorage.getItem("speaking_is_pro") === "1";
+  } catch {
+    return false;
+  }
+}
 
 export default function RecordsPage() {
-  /* ===== theme ===== */
+  const [isPro, setIsPro] = useState(false);
+
+  useEffect(() => {
+    setIsPro(getIsPro());
+  }, []);
+
   const pageBg: React.CSSProperties = {
     minHeight: "100vh",
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
+    padding: 24,
     background:
-      "radial-gradient(1200px 800px at 20% 10%, rgba(18,28,55,0.95) 0%, rgba(6,9,20,0.98) 55%, rgba(0,0,0,1) 100%)",
+      "radial-gradient(120% 120% at 50% 0%, #3b4252 0%, #1f2937 45%, #0f172a 100%)",
   };
 
   const panelStyle: React.CSSProperties = {
     width: "100%",
-    maxWidth: 560,
-    padding: "28px 26px 30px",
+    maxWidth: 420,
     borderRadius: 28,
-    background: "rgba(255,255,255,0.10)",
-    backdropFilter: "blur(14px)",
-    border: "1px solid rgba(255,255,255,0.18)",
-    boxShadow: "0 40px 80px rgba(0,0,0,0.55)",
+    padding: "26px 20px 20px",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(234, 179, 8, 0.28)",
+    boxShadow: "0 20px 48px rgba(0,0,0,0.42)",
+    backdropFilter: "blur(10px)",
     display: "flex",
     flexDirection: "column",
-    gap: 22,
+    gap: 14,
   };
 
   const titleStyle: React.CSSProperties = {
-    fontSize: 22,
+    fontSize: 26,
     fontWeight: 900,
-    letterSpacing: 0.5,
-    color: "#ffffff",
+    color: "rgba(255,255,255,0.96)",
     textAlign: "center",
-    marginBottom: 6,
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  };
+
+  const subStyle: React.CSSProperties = {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.78)",
+    textAlign: "center",
+    lineHeight: 1.7,
+    marginTop: -4,
+    marginBottom: 4,
+    whiteSpace: "pre-wrap",
+  };
+
+  const statusWrap: React.CSSProperties = {
+    display: "flex",
+    justifyContent: "center",
+    marginBottom: 2,
+  };
+
+  const statusPill: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "6px 12px",
+    borderRadius: 999,
+    border: "1px solid rgba(234, 179, 8, 0.45)",
+    background: "rgba(255,255,255,0.06)",
+    color: "rgba(255,255,255,0.92)",
+    fontSize: 12,
+    fontWeight: 900,
+    letterSpacing: 0.2,
   };
 
   const buttonStyle: React.CSSProperties = {
     display: "block",
     width: "100%",
-    padding: "18px 18px",
-    borderRadius: 18,
-    fontSize: 16,
-    fontWeight: 800,
-    letterSpacing: 0.4,
+    borderRadius: 999,
+    padding: "16px 18px",
     textAlign: "center",
-    color: "rgba(213, 200, 141, 0.95)",
     textDecoration: "none",
-    background: "rgba(255,255,255,0.12)",
-    border: "1px solid rgba(250, 221, 5, 0.24)",
-    boxShadow:
-      "0 14px 34px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.15)",
-    transition: "transform 0.15s ease, background 0.15s ease",
+    fontSize: 18,
+    fontWeight: 900,
+    color: "rgba(250,249,247,0.92)",
+    background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(234, 179, 8, 0.55)",
+    boxShadow: "0 14px 36px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,255,255,0.08)",
+    transition: "all 0.15s ease",
   };
 
   const buttonHover: React.CSSProperties = {
@@ -60,17 +103,38 @@ export default function RecordsPage() {
     transform: "translateY(-1px)",
   };
 
+  const lockedButtonStyle: React.CSSProperties = {
+    ...buttonStyle,
+    opacity: 0.6,
+  };
+
   const footerNote: React.CSSProperties = {
     marginTop: 8,
     fontSize: 12,
-    color: "rgba(255,255,255,0.65)",
+    color: "rgba(255,255,255,0.68)",
     textAlign: "center",
+    lineHeight: 1.7,
+    whiteSpace: "pre-wrap",
   };
+
+  const dashboardHint = isPro
+    ? "有料版では成長分析ダッシュボードを利用できます"
+    : "成長分析ダッシュボードは有料プランで解放されます";
 
   return (
     <main style={pageBg}>
       <div style={panelStyle}>
-        <div style={titleStyle}>記録（有料）</div>
+        <div style={titleStyle}>記録</div>
+
+        <div style={statusWrap}>
+          <span style={statusPill}>{isPro ? "有料（Pro）" : "無料"}</span>
+        </div>
+
+        <div style={subStyle}>
+          {isPro
+            ? "最近の記録と成長分析ダッシュボードが利用できます。"
+            : "最近の記録は利用できます。\n成長分析ダッシュボードは有料プランで解放されます。"}
+        </div>
 
         <Link
           href="/records/recent_test"
@@ -81,14 +145,24 @@ export default function RecordsPage() {
           📝 最近の記録
         </Link>
 
-        <Link
-          href="/records/dashboard"
-          style={buttonStyle}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, buttonHover)}
-          onMouseLeave={(e) => Object.assign(e.currentTarget.style, buttonStyle)}
-        >
-          📈 成長分析ダッシュボード
-        </Link>
+        {isPro ? (
+          <Link
+            href="/records/dashboard"
+            style={buttonStyle}
+            onMouseEnter={(e) => Object.assign(e.currentTarget.style, buttonHover)}
+            onMouseLeave={(e) => Object.assign(e.currentTarget.style, buttonStyle)}
+          >
+            📈 成長分析ダッシュボード
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={() => alert("成長分析ダッシュボードは有料プランで解放されます。")}
+            style={lockedButtonStyle}
+          >
+            📈 成長分析ダッシュボード
+          </button>
+        )}
 
         <Link
           href="/"
@@ -100,7 +174,8 @@ export default function RecordsPage() {
         </Link>
 
         <div style={footerNote}>
-          ※ 記録機能は今後さらに拡張予定です
+          ※ 最近の記録：無料は直近5件の自動保存／有料は手動保存した記録も表示
+          {"\n"}※ {dashboardHint}
         </div>
       </div>
     </main>

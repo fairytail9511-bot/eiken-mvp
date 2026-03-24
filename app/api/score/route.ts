@@ -1,8 +1,106 @@
 // app/api/score/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
+import crypto from "crypto";
 import type { ScoreResult } from "../../types";
+
+export const runtime = "nodejs";
+
 const MODEL_SCORE = "gpt-4-turbo-2024-04-09";
+const apiKey = process.env.OPENAI_API_KEY;
+
+// DB不要の署名鍵（未設定ならAPIキーから派生）
+const LIMIT_SECRET =
+  process.env.LIMIT_SECRET || (apiKey ? apiKey.slice(0, 32) : "fallback_secret");
+
+/* =====================
+   Access control
+===================== */
+type AccessMode = "pro" | "trial" | "free";
+
+type TokenPayload = {
+  v: 1;
+  trialUsed: boolean; // 初回フル体験を使ったか
+  month: string; // YYYY-MM
+  used: number; // 今月の無料採点回数（0..5）
+  iat: number; // 発行時刻
+};
+
+function monthKeyNow() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function b64urlEncode(buf: Buffer) {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function b64urlDecodeToBuffer(s: string) {
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  return Buffer.from(b64, "base64");
+}
+
+function signPayload(payload: TokenPayload): string {
+  const json = JSON.stringify(payload);
+  const body = b64urlEncode(Buffer.from(json, "utf8"));
+  const sig = b64urlEncode(crypto.createHmac("sha256", LIMIT_SECRET).update(body).digest());
+  return `${body}.${sig}`;
+}
+
+function verifyToken(token: string | undefined | null): TokenPayload | null {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+
+  const [body, sig] = parts;
+  const expected = b64urlEncode(crypto.createHmac("sha256", LIMIT_SECRET).update(body).digest());
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+
+  if (a.length !== b.length) return null;
+  if (!crypto.timingSafeEqual(a, b)) return null;
+
+  try {
+    const json = b64urlDecodeToBuffer(body).toString("utf8");
+    const p = JSON.parse(json);
+    if (p?.v !== 1) return null;
+    if (typeof p.trialUsed !== "boolean") return null;
+    if (typeof p.month !== "string") return null;
+    if (typeof p.used !== "number") return null;
+    if (typeof p.iat !== "number") return null;
+    return p as TokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+function freshPayloadFrom(prev: TokenPayload | null): TokenPayload {
+  const nowMonth = monthKeyNow();
+  const base: TokenPayload =
+    prev ??
+    {
+      v: 1,
+      trialUsed: false,
+      month: nowMonth,
+      used: 0,
+      iat: Date.now(),
+    };
+
+  if (base.month !== nowMonth) {
+    return {
+      v: 1,
+      trialUsed: base.trialUsed,
+      month: nowMonth,
+      used: 0,
+      iat: Date.now(),
+    };
+  }
+
+  return { ...base, iat: Date.now() };
+}
 
 /* =====================
    Types (local)
@@ -67,7 +165,6 @@ function normalizeBlocks(raw: any): ThreeBlock {
   };
 }
 
-//再評価成功率上げ
 function hasAnyAsciiLetters(s: string) {
   return /[A-Za-z]/.test(String(s ?? ""));
 }
@@ -123,8 +220,8 @@ async function scoreShortSpeechAI(args: { client: OpenAI; topic: string; transcr
     "- score は0-10の整数。\n" +
     "- summary は日本語で1〜2文。\n" +
     "- blocks は各項目日本語で1〜2文。\n" +
-    "- 観点: 立場提示→理由→具体例→結論、論理のつながり、具体性、言い切り。\n"+
-    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n"+
+    "- 観点: 立場提示→理由→具体例→結論、論理のつながり、具体性、言い切り。\n" +
+    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n" +
     "重要: didWell/missing/whyThisScore/summary はすべて日本語。\n";
 
   const user =
@@ -173,8 +270,8 @@ async function scoreInteractionAI(args: { client: OpenAI; topic: string; transcr
     "- summary は日本語で1〜2文。\n" +
     "- blocks は各項目日本語で1〜2文。\n" +
     "- 観点: 質問への直答、論点の一致、立場の明確さ、具体性、追い質問耐性、曖昧さ回避、回答量。\n" +
-    "- Q&Aログの Candidate の発言を中心に判断。\n"+
-    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n"+
+    "- Q&Aログの Candidate の発言を中心に判断。\n" +
+    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n" +
     "重要: didWell/missing/whyThisScore/summary はすべて日本語。\n";
 
   const user =
@@ -223,8 +320,8 @@ async function scoreGrammarVocabAI(args: { client: OpenAI; topic: string; transc
     "- summary は日本語で1〜2文。\n" +
     "- blocks は各項目日本語で1〜2文。\n" +
     "- 観点: 文法の正確さ、文の多様性、語彙の精度、コロケーション、フォーマルさ。\n" +
-    "- transcriptの Candidate 発言を中心に判断。\n"+
-    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n"+
+    "- transcriptの Candidate 発言を中心に判断。\n" +
+    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n" +
     "重要: didWell/missing/whyThisScore/summary はすべて日本語。\n";
 
   const user =
@@ -273,8 +370,8 @@ async function scorePronunciationAI(args: { client: OpenAI; topic: string; trans
     "- summary は日本語で1〜2文。\n" +
     "- blocks は各項目日本語で1〜2文。\n" +
     "- 観点: 途切れ、言い直し、流れ、明瞭さ。\n" +
-    "- 訛りやネイティブらしさは評価しない。\n"+
-    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n"+
+    "- 訛りやネイティブらしさは評価しない。\n" +
+    "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として0点扱いになるため、必ず日本語で書くこと。\n" +
     "重要: didWell/missing/whyThisScore/summary はすべて日本語。\n";
 
   const user =
@@ -361,15 +458,16 @@ function normalizeScore(parsed: any): ScoreResult & { three_blocks?: ThreeBlocks
 ===================== */
 export async function POST(req: Request) {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: "OPENAI_API_KEY is missing in .env.local" }, { status: 500 });
     }
 
     const body = await req.json().catch(() => null);
 
-    const topic = (body?.topic ?? "").toString().trim();
-    const transcript = (body?.transcript ?? "").toString().trim();
+    const topic = String(body?.topic ?? "").trim();
+    const transcript = String(body?.transcript ?? "").trim();
+    const accessToken = typeof body?.accessToken === "string" ? body.accessToken : "";
+    const isPro = body?.isPro === true;
 
     if (!transcript) {
       return NextResponse.json({ error: "transcript is required" }, { status: 400 });
@@ -377,7 +475,32 @@ export async function POST(req: Request) {
 
     const client = new OpenAI({ apiKey });
 
-    // まずは既存の「全体採点」を取得（JSONスキーマは維持、文面は日本語）
+    // Writingアプリと同じ考え方で access を決定
+    const prev = verifyToken(accessToken);
+    let payload = freshPayloadFrom(prev);
+
+    let accessMode: AccessMode = "free";
+    if (isPro) {
+      accessMode = "pro";
+    } else if (!payload.trialUsed) {
+      accessMode = "trial";
+    } else {
+      if (payload.used >= 5) {
+        const tokenOut = signPayload(payload);
+        return NextResponse.json(
+          {
+            paywall: true,
+            message: "無料枠（月5回）に達しました。続きは有料プランで解放されます。",
+            accessToken: tokenOut,
+            usedThisMonth: payload.used,
+            limit: 5,
+          },
+          { status: 402 }
+        );
+      }
+      accessMode = "free";
+    }
+
     const system =
       "あなたは英検1級二次面接の面接官です。\n" +
       "与えられた面接transcript（テキストのみ）に基づき採点してください。\n" +
@@ -395,9 +518,9 @@ export async function POST(req: Request) {
       "- section_feedback は各項目日本語で1〜2文（具体的に）。\n" +
       "- overall_summary は日本語で2〜3文。\n" +
       "- next_steps は日本語で3つ、行動レベルの具体指示。\n" +
-      "- comment は日本語で、良かった点→改善点の順にまとめた文章（6〜9文、全体で約250〜400文字）。\n";
-      + "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として採点失格。\n"
-+ "重要: comment は日本語の文章形式で約100語（目安: 250〜450文字）。箇条書き禁止。Good/Improve/Add next の形式は禁止。\n"
+      "- comment は日本語で、良かった点→改善点の順にまとめた文章（6〜9文、全体で約250〜400文字）。\n" +
+      "重要: 出力は日本語のみ。英語は禁止。英語が1文字でも含まれたら不正解として採点失格。\n" +
+      "重要: comment は日本語の文章形式で約100語（目安: 250〜450文字）。箇条書き禁止。Good/Improve/Add next の形式は禁止。\n";
 
     const user =
       `Topic: ${topic || "(not provided)"}\n\n` +
@@ -429,51 +552,66 @@ export async function POST(req: Request) {
     parsed = { ...parsed, three_blocks: { ...(parsed?.three_blocks ?? {}) } };
 
     try {
-  const ss = await withRetry(async () => ensureJapaneseBlocks(await scoreShortSpeechAI({ client, topic, transcript })), 2);
-  parsed = {
-    ...parsed,
-    section_feedback: { ...(parsed?.section_feedback ?? {}), short_speech: ss.summary },
-    three_blocks: { ...(parsed?.three_blocks ?? {}), short_speech: ss.blocks },
-  };
-} catch {
-  // noop
-}
+      const ss = await withRetry(async () => ensureJapaneseBlocks(await scoreShortSpeechAI({ client, topic, transcript })), 2);
+      parsed = {
+        ...parsed,
+        section_feedback: { ...(parsed?.section_feedback ?? {}), short_speech: ss.summary },
+        three_blocks: { ...(parsed?.three_blocks ?? {}), short_speech: ss.blocks },
+      };
+    } catch {
+      // noop
+    }
 
     try {
-  const ss = await withRetry(async () => ensureJapaneseBlocks(await scoreInteractionAI({ client, topic, transcript })), 2);
-  parsed = {
-    ...parsed,
-    section_feedback: { ...(parsed?.section_feedback ?? {}), interaction: ss.summary },
-    three_blocks: { ...(parsed?.three_blocks ?? {}), interaction: ss.blocks },
-  };
-} catch {
-  // noop
-}
+      const ss = await withRetry(async () => ensureJapaneseBlocks(await scoreInteractionAI({ client, topic, transcript })), 2);
+      parsed = {
+        ...parsed,
+        section_feedback: { ...(parsed?.section_feedback ?? {}), interaction: ss.summary },
+        three_blocks: { ...(parsed?.three_blocks ?? {}), interaction: ss.blocks },
+      };
+    } catch {
+      // noop
+    }
 
     try {
-  const ss = await withRetry(async () => ensureJapaneseBlocks(await scoreGrammarVocabAI({ client, topic, transcript })), 2);
-  parsed = {
-    ...parsed,
-    section_feedback: { ...(parsed?.section_feedback ?? {}), grammar_vocab: ss.summary },
-    three_blocks: { ...(parsed?.three_blocks ?? {}), grammar_vocab: ss.blocks },
-  };
-} catch {
-  // noop
-}
+      const ss = await withRetry(async () => ensureJapaneseBlocks(await scoreGrammarVocabAI({ client, topic, transcript })), 2);
+      parsed = {
+        ...parsed,
+        section_feedback: { ...(parsed?.section_feedback ?? {}), grammar_vocab: ss.summary },
+        three_blocks: { ...(parsed?.three_blocks ?? {}), grammar_vocab: ss.blocks },
+      };
+    } catch {
+      // noop
+    }
 
     try {
-  const ss = await withRetry(async () => ensureJapaneseBlocks(await scorePronunciationAI({ client, topic, transcript })), 2);
-  parsed = {
-    ...parsed,
-    section_feedback: { ...(parsed?.section_feedback ?? {}), pronunciation_fluency: ss.summary },
-    three_blocks: { ...(parsed?.three_blocks ?? {}), pronunciation_fluency: ss.blocks },
-  };
-} catch {
-  // noop
-}
+      const ss = await withRetry(async () => ensureJapaneseBlocks(await scorePronunciationAI({ client, topic, transcript })), 2);
+      parsed = {
+        ...parsed,
+        section_feedback: { ...(parsed?.section_feedback ?? {}), pronunciation_fluency: ss.summary },
+        three_blocks: { ...(parsed?.three_blocks ?? {}), pronunciation_fluency: ss.blocks },
+      };
+    } catch {
+      // noop
+    }
 
     const normalized = normalizeScore(parsed);
-    return NextResponse.json(normalized as any);
+
+    // token更新（trialは回数に入れない）
+    if (accessMode === "trial") {
+      payload.trialUsed = true;
+    } else if (accessMode === "free") {
+      payload.used = payload.used + 1;
+    }
+    const tokenOut = signPayload(payload);
+
+    return NextResponse.json({
+      accessMode,
+      accessToken: tokenOut,
+      usedThisMonth: payload.used,
+      limit: 5,
+      ...(normalized as any),
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
   }

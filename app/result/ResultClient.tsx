@@ -6,12 +6,12 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 /* =====================
-   Types 
+   Types
 ===================== */
 type Msg = { role: "examiner" | "user"; text: string };
 
 type QAAnalysisItem = {
-  questionIndex: number; // 0-3
+  questionIndex: number;
   questionText: string;
   answerText: string;
   answerLength: number;
@@ -50,6 +50,11 @@ type ScoreResultAny = {
 type SessionData = {
   topic?: string;
   finishedAt?: string;
+  difficulty?: "easy" | "real" | "hard" | string;
+  durationSec?: number;
+  transcript?: string;
+  accessMode?: "pro" | "trial" | "free" | string;
+  usedThisMonth?: number;
   scoreResult?: ScoreResultAny;
   logs?: {
     smalltalk?: Msg[] | null;
@@ -67,25 +72,13 @@ type SpeechAIFeedback = {
   improved: string;
 };
 
-// ✅ localStorage keys
-const LS_KEYS = {
-  LAST_SESSION: "eiken_mvp_lastSession",
-  RECENT_RECORDS: "eiken_mvp_recentRecords",
-  INTERVIEW_START: "eiken_mvp_interview_start",
-} as const;
-
-/**
- * ✅ 保存フォーマット
- * - session: 全部保存（あなたの指定）
- * - topic/total/breakdown: records側が即使えるように「要約」も同時保存
- */
 type SavedRecord = {
   id: string;
-  savedAt: string; // ISO
+  savedAt: string;
   topic: string;
   difficulty?: "easy" | "real" | "hard" | string;
   durationSec?: number;
-  total: number; // 0-40
+  total: number;
   breakdown: {
     short_speech: number;
     interaction: number;
@@ -95,6 +88,25 @@ type SavedRecord = {
   session: SessionData;
 };
 
+/* =====================
+   localStorage keys
+===================== */
+const LS_KEYS = {
+  LAST_SESSION: "eiken_mvp_lastSession",
+  RECENT_RECORDS: "eiken_mvp_recentRecords",
+  INTERVIEW_START: "eiken_mvp_interview_start",
+  FREE_RECENT_RECORDS: "speaking_recent_records_free",
+  FREE_AUTOSAVE_DONE: "speaking_free_autosave_done_ids",
+  IS_PRO: "speaking_is_pro",
+} as const;
+
+const REFRESH_LIMIT_FREE = 3;
+const RECENT_LIMIT_PRO = 20;
+const RECENT_LIMIT_FREE = 5;
+
+/* =====================
+   Helpers
+===================== */
 function safeJsonParseArr<T>(raw: string | null): T[] {
   if (!raw) return [];
   try {
@@ -105,61 +117,54 @@ function safeJsonParseArr<T>(raw: string | null): T[] {
   }
 }
 
-// ✅ MAX件数
-const RECENT_LIMIT = 20;
-
-function saveToRecentRecords(session: SessionData) {
-  if (typeof window === "undefined") throw new Error("ブラウザ環境でのみ保存できます。");
-
-  const now = new Date().toISOString();
-  const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-  const b = session?.scoreResult?.breakdown ?? {};
-  const short_speech = Number(b.short_speech) || 0;
-  const interaction = Number(b.interaction) || 0;
-  const grammar_vocab = Number(b.grammar_vocab) || 0;
-  const pronunciation_fluency = Number(b.pronunciation_fluency) || 0;
-
-  const total = short_speech + interaction + grammar_vocab + pronunciation_fluency;
-
-  const record: SavedRecord = {
-    id,
-    savedAt: now,
-    durationSec: (session as any)?.durationSec ?? undefined,
-    topic: String(session?.topic ?? ""),
-    total,
-    breakdown: { short_speech, interaction, grammar_vocab, pronunciation_fluency },
-    session,
-    difficulty: (session as any)?.difficulty ?? (session as any)?.settings?.difficulty ?? "-",
-  };
-
-  const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.RECENT_RECORDS));
-  const next = [record, ...current].slice(0, RECENT_LIMIT);
-
-  localStorage.setItem(LS_KEYS.RECENT_RECORDS, JSON.stringify(next));
-  return record;
+function safeJsonParse<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
 }
 
-/* =====================
-   Helpers
-===================== */
 function asInt(n: any, fallback = 0) {
   const x = Number(n);
   return Number.isFinite(x) ? Math.round(x) : fallback;
 }
+
 function asString(s: any, fallback = "") {
   return typeof s === "string" ? s : fallback;
 }
+
 function clamp0to10(n: number) {
   const x = Number(n);
   if (!Number.isFinite(x)) return 0;
   return Math.max(0, Math.min(10, Math.round(x)));
 }
+
 function formatDuration(ms: number) {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return `${m}分${String(s).padStart(2, "0")}秒`;
+}
+
+function getIsPro() {
+  try {
+    return localStorage.getItem(LS_KEYS.IS_PRO) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSpeechText(raw: string) {
+  const s = String(raw ?? "");
+  return s
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[ \u00A0]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function isSpeechAIFeedback(x: any): x is SpeechAIFeedback {
@@ -200,17 +205,6 @@ function pickSpeechAIFeedback(payload: any): SpeechAIFeedback | null {
   return null;
 }
 
-function normalizeSpeechText(raw: string) {
-  const s = String(raw ?? "");
-  return s
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/\t/g, " ")
-    .replace(/[ \u00A0]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function hashFNV1a32(str: string) {
   let h = 0x811c9dc5;
   for (let i = 0; i < str.length; i++) {
@@ -224,17 +218,119 @@ function cacheKeyForSpeech(speechNormalized: string) {
   return `eiken_mvp_speech_ai_${hashFNV1a32(speechNormalized)}`;
 }
 
-function safeJsonParse<T>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
+function buildTranscriptFromSession(session: SessionData | null) {
+  if (!session) return "";
+
+  const stored = asString((session as any)?.transcript).trim();
+  if (stored) return stored;
+
+  const topic = asString(session.topic).trim();
+  const speech = asString(session.logs?.speech).trim();
+  const qa = Array.isArray(session.logs?.qa) ? session.logs?.qa : [];
+
+  if (!topic || !speech || !qa.length) return "";
+
+  const lines: string[] = [];
+  lines.push(`TOPIC: ${topic}`);
+  lines.push("");
+  lines.push("SPEECH:");
+  lines.push(speech);
+  lines.push("");
+  lines.push("Q&A:");
+  for (const m of qa) {
+    const who = m.role === "examiner" ? "Examiner" : "Candidate";
+    lines.push(`${who}: ${String(m.text ?? "")}`);
+  }
+  return lines.join("\n");
+}
+
+function buildSavedRecord(session: SessionData): SavedRecord {
+  const now = new Date().toISOString();
+  const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+  const b = session?.scoreResult?.breakdown ?? {};
+  const short_speech = Number(b.short_speech) || 0;
+  const interaction = Number(b.interaction) || 0;
+  const grammar_vocab = Number(b.grammar_vocab) || 0;
+  const pronunciation_fluency = Number(b.pronunciation_fluency) || 0;
+  const total = short_speech + interaction + grammar_vocab + pronunciation_fluency;
+
+  return {
+    id,
+    savedAt: now,
+    durationSec: session?.durationSec ?? undefined,
+    topic: String(session?.topic ?? ""),
+    total,
+    breakdown: { short_speech, interaction, grammar_vocab, pronunciation_fluency },
+    session,
+    difficulty: session?.difficulty ?? "-",
+  };
+}
+
+function saveToRecentRecords(session: SessionData) {
+  if (typeof window === "undefined") throw new Error("ブラウザ環境でのみ保存できます。");
+  const record = buildSavedRecord(session);
+  const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.RECENT_RECORDS));
+  const next = [record, ...current].slice(0, RECENT_LIMIT_PRO);
+  localStorage.setItem(LS_KEYS.RECENT_RECORDS, JSON.stringify(next));
+  return record;
+}
+
+function freeAutoSaveId(session: SessionData) {
+  const topic = asString(session.topic);
+  const finishedAt = asString(session.finishedAt);
+  const total = asInt(session?.scoreResult?.total);
+  return `${finishedAt}__${topic}__${total}`;
+}
+
+function saveToFreeRecentRecords(session: SessionData) {
+  if (typeof window === "undefined") throw new Error("ブラウザ環境でのみ保存できます。");
+
+  const dedupeId = freeAutoSaveId(session);
+  const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.FREE_RECENT_RECORDS));
+  const withoutDup = current.filter((x) => freeAutoSaveId(x.session) !== dedupeId);
+  const next = [buildSavedRecord(session), ...withoutDup].slice(0, RECENT_LIMIT_FREE);
+  localStorage.setItem(LS_KEYS.FREE_RECENT_RECORDS, JSON.stringify(next));
+}
+
+function hasFreeAutoSaved(session: SessionData) {
+  const done = safeJsonParseArr<string>(localStorage.getItem(LS_KEYS.FREE_AUTOSAVE_DONE));
+  return done.includes(freeAutoSaveId(session));
+}
+
+function markFreeAutoSaved(session: SessionData) {
+  const id = freeAutoSaveId(session);
+  const done = safeJsonParseArr<string>(localStorage.getItem(LS_KEYS.FREE_AUTOSAVE_DONE));
+  if (!done.includes(id)) {
+    localStorage.setItem(LS_KEYS.FREE_AUTOSAVE_DONE, JSON.stringify([id, ...done].slice(0, 100)));
   }
 }
 
+function sessionRefreshKey(session: SessionData | null, target: "sections" | "comment") {
+  const seed = `${asString(session?.topic)}__${asString(session?.finishedAt)}__${target}`;
+  return `speaking_detail_refresh_${target}_${hashFNV1a32(seed)}`;
+}
+
+function getRefreshUsed(session: SessionData | null, target: "sections" | "comment") {
+  if (typeof window === "undefined") return 0;
+  try {
+    const k = sessionRefreshKey(session, target);
+    return Math.max(0, asInt(localStorage.getItem(k), 0));
+  } catch {
+    return 0;
+  }
+}
+
+function setRefreshUsed(session: SessionData | null, target: "sections" | "comment", n: number) {
+  if (typeof window === "undefined") return;
+  try {
+    const k = sessionRefreshKey(session, target);
+    localStorage.setItem(k, String(Math.max(0, n)));
+  } catch {}
+}
+
 /* =====================
-   Styles (gold / luxury)
+   Styles
 ===================== */
 const pageBg: React.CSSProperties = {
   minHeight: "100vh",
@@ -264,8 +360,8 @@ const pillBtn: React.CSSProperties = {
   padding: "6px 10px",
   fontSize: 12,
   background: "#fff",
-  color:"#0f172a",
-  fontWeight:700,
+  color: "#0f172a",
+  fontWeight: 700,
   cursor: "pointer",
   whiteSpace: "nowrap",
 };
@@ -364,18 +460,14 @@ function Accordion({
           </div>
         </div>
 
-        {open && (
-            <div style={{ padding: "12px 12px 14px 12px", color:"#0f172a" }}>
-                {children}
-                </div>
-            )}
+        {open && <div style={{ padding: "12px 12px 14px 12px", color: "#0f172a" }}>{children}</div>}
       </div>
     </div>
   );
 }
 
 /* =====================
-   Score 3-block (UI)
+   UI bits
 ===================== */
 function ThreeBlockCard({
   title,
@@ -409,7 +501,7 @@ function ThreeBlockCard({
           }}
         >
           この項目の評価生成に失敗しました。
-          {"\n"}AIによる再評価を行ってください。
+          {"\n"}4項目再評価をお試しください。
         </div>
       </div>
     );
@@ -451,6 +543,30 @@ function ThreeBlockCard({
   );
 }
 
+function LockCard({
+  title,
+  body,
+}: {
+  title: string;
+  body: string;
+}) {
+  return (
+    <div
+      style={{
+        border: "1px solid rgba(0,0,0,0.12)",
+        borderRadius: 14,
+        padding: 14,
+        background: "linear-gradient(180deg, rgba(255,255,255,1), rgba(248,250,252,1))",
+      }}
+    >
+      <div style={{ fontWeight: 900, fontSize: 14, color: "#0f172a" }}>🔒 {title}</div>
+      <div style={{ fontSize: 13, color: "#374151", whiteSpace: "pre-wrap", lineHeight: 1.7, marginTop: 8 }}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
 /* =====================
    Client Page
 ===================== */
@@ -461,28 +577,38 @@ export default function ResultClient() {
 
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [error, setError] = useState("");
-  const [elapsed, setElapsed] = useState<string>("");
+  const [elapsed, setElapsed] = useState("");
+
+  const [isPro, setIsPro] = useState(false);
 
   const [speechAi, setSpeechAi] = useState<SpeechAIFeedback | null>(null);
   const [speechAiLoading, setSpeechAiLoading] = useState(false);
   const [speechAiError, setSpeechAiError] = useState("");
 
-  const [regenLoading, setRegenLoading] = useState(false);
-  const [regenError, setRegenError] = useState("");
+  const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [sectionsError, setSectionsError] = useState("");
+
+  const [commentLoading, setCommentLoading] = useState(false);
+  const [commentError, setCommentError] = useState("");
 
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveDone, setSaveDone] = useState(false);
+  const [freeAutoSaved, setFreeAutoSaved] = useState(false);
+
+  const [sectionsRefreshUsed, setSectionsRefreshUsed] = useState(0);
+  const [commentRefreshUsed, setCommentRefreshUsed] = useState(0);
 
   useEffect(() => {
     try {
+      setIsPro(getIsPro());
+
       const raw = localStorage.getItem(LS_KEYS.LAST_SESSION);
       if (!raw) {
         setError("結果データが見つかりません。");
         return;
       }
 
-      const parsed = JSON.parse(raw) as any;
-
+      const parsed = JSON.parse(raw) as SessionData;
       let durationSec: number | undefined = undefined;
 
       try {
@@ -501,21 +627,36 @@ export default function ResultClient() {
       const nextSession = durationSec != null ? { ...parsed, durationSec } : parsed;
 
       try {
-        if (durationSec != null) localStorage.setItem(LS_KEYS.LAST_SESSION, JSON.stringify(nextSession));
+        if (durationSec != null) {
+          localStorage.setItem(LS_KEYS.LAST_SESSION, JSON.stringify(nextSession));
+        }
       } catch {}
 
       try {
         if (!durationSec) {
-          const dur = Number((nextSession as any)?.durationSec);
+          const dur = Number(nextSession?.durationSec);
           if (Number.isFinite(dur) && dur > 0) setElapsed(formatDuration(dur * 1000));
         }
       } catch {}
 
-      setSessionData(nextSession as any);
+      setSessionData(nextSession);
+      setSectionsRefreshUsed(getRefreshUsed(nextSession, "sections"));
+      setCommentRefreshUsed(getRefreshUsed(nextSession, "comment"));
     } catch {
       setError("結果データの読み込みに失敗しました。");
     }
   }, []);
+
+  useEffect(() => {
+    if (!sessionData || fromRecords || isPro) return;
+    try {
+      if (!hasFreeAutoSaved(sessionData)) {
+        saveToFreeRecentRecords(sessionData);
+        markFreeAutoSaved(sessionData);
+        setFreeAutoSaved(true);
+      }
+    } catch {}
+  }, [sessionData, fromRecords, isPro]);
 
   const breakdown = sessionData?.scoreResult?.breakdown ?? {};
   const bShort = asInt(breakdown.short_speech);
@@ -537,14 +678,27 @@ export default function ResultClient() {
   const smalltalk = sessionData?.logs?.smalltalk ?? [];
   const speechRaw = sessionData?.logs?.speech ?? "";
   const speechText = useMemo(() => normalizeSpeechText(speechRaw), [speechRaw]);
+  const qaAnalysis = sessionData?.qaAnalysis ?? [];
+
+  const sectionsRemaining = isPro ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - sectionsRefreshUsed);
+  const commentRemaining = isPro ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - commentRefreshUsed);
+
+  function persistSession(next: SessionData) {
+    try {
+      localStorage.setItem(LS_KEYS.LAST_SESSION, JSON.stringify(next));
+    } catch {}
+    setSessionData(next);
+  }
 
   async function fetchSpeechAiOnce(force: boolean) {
     setSpeechAiError("");
     setSpeechAi(null);
 
+    if (!isPro) return;
+
     const text = String(speechText ?? "").trim();
     if (!text) {
-      setSpeechAiError("この項目の評価生成に失敗しました。\nAIによる再評価を行ってください。");
+      setSpeechAiError("この項目の評価生成に失敗しました。");
       return;
     }
 
@@ -579,7 +733,7 @@ export default function ResultClient() {
 
       setSpeechAi(picked);
     } catch {
-      setSpeechAiError("この項目の評価生成に失敗しました。\nAIによる再評価を行ってください。");
+      setSpeechAiError("Speech分析の再評価に失敗しました。");
     } finally {
       setSpeechAiLoading(false);
     }
@@ -588,55 +742,47 @@ export default function ResultClient() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (cancelled) return;
+      if (cancelled || !isPro) return;
       await fetchSpeechAiOnce(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [speechText]);
+  }, [speechText, isPro]);
 
-  const qaAnalysis = sessionData?.qaAnalysis ?? [];
+  async function refreshSectionsOnly() {
+    setSectionsError("");
 
-  async function regenTextsOnly() {
-    setRegenError("");
     if (!sessionData) {
-      setRegenError("結果データが見つかりません。");
+      setSectionsError("結果データが見つかりません。");
       return;
     }
 
-    const topic = String(sessionData.topic ?? "").trim();
-    const speech = String(sessionData.logs?.speech ?? "").trim();
-    const qa = sessionData.logs?.qa;
-
-    if (!topic || !speech || !qa) {
-      setRegenError("再評価に必要なログ（topic / speech / qa）が不足しています。");
+    if (!isPro && sectionsRefreshUsed >= REFRESH_LIMIT_FREE) {
+      setSectionsError(`無料版の4項目再評価は最大${REFRESH_LIMIT_FREE}回です。`);
       return;
     }
 
-    const lines: string[] = [];
-    lines.push(`TOPIC: ${topic}`);
-    lines.push("");
-    lines.push("SPEECH:");
-    lines.push(speech);
-    lines.push("");
-    lines.push("Q&A:");
-    for (const m of qa as any[]) {
-      const who = m.role === "examiner" ? "Examiner" : "Candidate";
-      lines.push(`${who}: ${String(m.text ?? "")}`);
-    }
-    const transcript = lines.join("\n");
+    const topic = asString(sessionData.topic).trim();
+    const transcript = buildTranscriptFromSession(sessionData);
 
-    setRegenLoading(true);
+    if (!topic || !transcript) {
+      setSectionsError("4項目再評価に必要なログが不足しています。");
+      return;
+    }
+
+    setSectionsLoading(true);
     try {
-      const res = await fetch("/api/score", {
+      const res = await fetch("/api/score-detail", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, transcript }),
+        body: JSON.stringify({ topic, transcript, target: "sections" }),
       });
 
       const data = (await res.json()) as any;
-      if (!res.ok) throw new Error(asString(data?.error, "Failed to re-score"));
+      if (!res.ok || !data?.ok) {
+        throw new Error(asString(data?.error, "4項目再評価に失敗しました。"));
+      }
 
       const next: SessionData = {
         ...sessionData,
@@ -644,19 +790,87 @@ export default function ResultClient() {
           ...(sessionData.scoreResult ?? {}),
           section_feedback: data?.section_feedback ?? sessionData.scoreResult?.section_feedback,
           three_blocks: data?.three_blocks ?? sessionData.scoreResult?.three_blocks,
+        },
+      };
+
+      persistSession(next);
+
+      if (!isPro) {
+        const nextUsed = sectionsRefreshUsed + 1;
+        setRefreshUsed(sessionData, "sections", nextUsed);
+        setSectionsRefreshUsed(nextUsed);
+      }
+    } catch (e: any) {
+      setSectionsError(e?.message ?? "4項目再評価に失敗しました。");
+    } finally {
+      setSectionsLoading(false);
+    }
+  }
+
+  async function refreshCommentOnly() {
+    setCommentError("");
+
+    if (!sessionData) {
+      setCommentError("結果データが見つかりません。");
+      return;
+    }
+
+    if (!isPro && commentRefreshUsed >= REFRESH_LIMIT_FREE) {
+      setCommentError(`無料版の面接官コメント再評価は最大${REFRESH_LIMIT_FREE}回です。`);
+      return;
+    }
+
+    const topic = asString(sessionData.topic).trim();
+    const transcript = buildTranscriptFromSession(sessionData);
+
+    if (!topic || !transcript) {
+      setCommentError("コメント再評価に必要なログが不足しています。");
+      return;
+    }
+
+    setCommentLoading(true);
+    try {
+      const res = await fetch("/api/score-detail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic,
+          transcript,
+          target: "comment",
+          total,
+          breakdown: {
+            short_speech: bShort,
+            interaction: bInter,
+            grammar_vocab: bGV,
+            pronunciation_fluency: bPron,
+          },
+        }),
+      });
+
+      const data = (await res.json()) as any;
+      if (!res.ok || !data?.ok) {
+        throw new Error(asString(data?.error, "面接官コメント再評価に失敗しました。"));
+      }
+
+      const next: SessionData = {
+        ...sessionData,
+        scoreResult: {
+          ...(sessionData.scoreResult ?? {}),
           comment: typeof data?.comment === "string" ? data.comment : sessionData.scoreResult?.comment,
         },
       };
 
-      try {
-        localStorage.setItem(LS_KEYS.LAST_SESSION, JSON.stringify(next));
-      } catch {}
+      persistSession(next);
 
-      setSessionData(next);
+      if (!isPro) {
+        const nextUsed = commentRefreshUsed + 1;
+        setRefreshUsed(sessionData, "comment", nextUsed);
+        setCommentRefreshUsed(nextUsed);
+      }
     } catch (e: any) {
-      setRegenError(e?.message ?? "再評価に失敗しました。");
+      setCommentError(e?.message ?? "面接官コメント再評価に失敗しました。");
     } finally {
-      setRegenLoading(false);
+      setCommentLoading(false);
     }
   }
 
@@ -666,6 +880,11 @@ export default function ResultClient() {
 
     if (!sessionData) {
       setError("保存する結果データが見つかりません。");
+      return;
+    }
+
+    if (!isPro) {
+      setError("無料版は自動で直近5件まで保存されます。正式保存はProで利用できます。");
       return;
     }
 
@@ -704,12 +923,21 @@ export default function ResultClient() {
           <div style={{ color: "#fff" }}>
             <div style={{ fontSize: 18, fontWeight: 900, lineHeight: 1.2 }}>面接結果</div>
             {elapsed ? <div style={{ fontSize: 12, opacity: 0.9, marginTop: 2 }}>（所要時間：{elapsed}）</div> : null}
+            <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>
+              {isPro
+                ? "Pro：再評価無制限・正式保存可"
+                : `無料版：4項目再評価 ${sectionsRefreshUsed}/${REFRESH_LIMIT_FREE} 回・コメント再評価 ${commentRefreshUsed}/${REFRESH_LIMIT_FREE} 回`}
+            </div>
+            {!isPro && freeAutoSaved ? (
+              <div style={{ fontSize: 12, opacity: 0.9, marginTop: 2 }}>無料版のため、この結果は直近5件用に自動保存されました。</div>
+            ) : null}
           </div>
 
-          {(error || regenError) && (
+          {(error || sectionsError || commentError) && (
             <div style={{ marginTop: 10 }}>
               {error && <div style={{ color: "#fecaca", fontSize: 13, whiteSpace: "pre-wrap" }}>{error}</div>}
-              {regenError && <div style={{ color: "#fecaca", fontSize: 13, whiteSpace: "pre-wrap" }}>{regenError}</div>}
+              {sectionsError && <div style={{ color: "#fecaca", fontSize: 13, whiteSpace: "pre-wrap" }}>{sectionsError}</div>}
+              {commentError && <div style={{ color: "#fecaca", fontSize: 13, whiteSpace: "pre-wrap" }}>{commentError}</div>}
             </div>
           )}
         </div>
@@ -720,41 +948,81 @@ export default function ResultClient() {
               icon={<span>📌</span>}
               title="総合スコア"
               right={
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontWeight: 900, color: "#111", fontSize: 10, whiteSpace: "nowrap" }}>
-                    {total} / 40
-                  </span>
-                  <button
-                    type="button"
-                    onClick={regenTextsOnly}
-                    disabled={regenLoading}
-                    style={{ ...pillBtn, opacity: regenLoading ? 0.6 : 1 }}
-                    title="文書のみ再評価（点数は変わりません）"
-                  >
-                    {regenLoading ? "再評価中..." : "文書のみ再評価"}
-                  </button>
-                </div>
+                <span style={{ fontWeight: 900, color: "#111", fontSize: 12, whiteSpace: "nowrap" }}>
+                  {total} / 40
+                </span>
               }
+              defaultOpen
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。</div>
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 1度で再評価されない可能性もありますがその場合は数度お試しください。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 4項目再評価は点数を変えず、各評価文のみを補完・更新します。</div>
+              <div style={{ fontSize: 12, color: "#374151" }}>※ 面接官コメント再評価は最後のコメントだけを更新し、4項目評価には影響しません。</div>
+              {!isPro && (
+                <div style={{ fontSize: 12, color: "#374151", marginTop: 2 }}>
+                  ※ 無料版の再評価回数は各ボタンごとに最大{REFRESH_LIMIT_FREE}回です。
+                </div>
+              )}
 
+              <div style={{ height: 12 }} />
 
-              <div style={{ height: 10 }} />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={refreshSectionsOnly}
+                  disabled={sectionsLoading}
+                  style={{ ...pillBtn, opacity: sectionsLoading ? 0.6 : 1 }}
+                  title="4項目評価のみ再評価"
+                >
+                  {sectionsLoading
+                    ? "4項目再評価中..."
+                    : isPro
+                    ? "4項目再評価"
+                    : `4項目再評価（残り${sectionsRemaining}回）`}
+                </button>
 
-              <Accordion icon={<span>①</span>} title="Short Speech" right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bShort)}/10</span>}>
+                <button
+                  type="button"
+                  onClick={refreshCommentOnly}
+                  disabled={commentLoading}
+                  style={{ ...pillBtn, opacity: commentLoading ? 0.6 : 1 }}
+                  title="面接官コメントのみ再評価"
+                >
+                  {commentLoading
+                    ? "コメント再評価中..."
+                    : isPro
+                    ? "面接官コメント再評価"
+                    : `コメント再評価（残り${commentRemaining}回）`}
+                </button>
+              </div>
+
+              <Accordion
+                icon={<span>①</span>}
+                title="Short Speech"
+                right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bShort)}/10</span>}
+              >
                 <ThreeBlockCard title="Short Speech" score={bShort} blocks={threeBlocks.short_speech} />
               </Accordion>
 
-              <Accordion icon={<span>②</span>} title="Interaction" right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bInter)}/10</span>}>
+              <Accordion
+                icon={<span>②</span>}
+                title="Interaction"
+                right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bInter)}/10</span>}
+              >
                 <ThreeBlockCard title="Interaction" score={bInter} blocks={threeBlocks.interaction} />
               </Accordion>
 
-              <Accordion icon={<span>③</span>} title="Grammar & Vocabulary" right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bGV)}/10</span>}>
+              <Accordion
+                icon={<span>③</span>}
+                title="Grammar & Vocabulary"
+                right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bGV)}/10</span>}
+              >
                 <ThreeBlockCard title="Grammar & Vocabulary" score={bGV} blocks={threeBlocks.grammar_vocab} />
               </Accordion>
 
-              <Accordion icon={<span>④</span>} title="Pronunciation（推定）" right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bPron)}/10</span>}>
+              <Accordion
+                icon={<span>④</span>}
+                title="Pronunciation（推定）"
+                right={<span style={{ fontWeight: 900, color: "#111", fontSize: 14 }}>{clamp0to10(bPron)}/10</span>}
+              >
                 <ThreeBlockCard title="Pronunciation" score={bPron} blocks={threeBlocks.pronunciation_fluency} />
                 <div style={{ marginTop: 10, fontSize: 11, color: "#6b7280", lineHeight: 1.6 }}>
                   ※ 話速・詰まり・明瞭度などの音声特徴をもとにした参考評価です。
@@ -784,22 +1052,39 @@ export default function ResultClient() {
               icon={<span>🧠</span>}
               title="Speech分析"
               right={
-                <button
-                  type="button"
-                  onClick={() => fetchSpeechAiOnce(true)}
-                  disabled={speechAiLoading || !speechText}
-                  style={{ ...pillBtn, opacity: speechAiLoading ? 0.6 : 1 }}
-                  title="Speech構成分析を再評価（点数は変わりません）"
-                >
-                  {speechAiLoading ? "再評価中..." : "文書のみ再評価"}
-                </button>
+                isPro ? (
+                  <button
+                    type="button"
+                    onClick={() => fetchSpeechAiOnce(true)}
+                    disabled={speechAiLoading || !speechText}
+                    style={{ ...pillBtn, opacity: speechAiLoading ? 0.6 : 1 }}
+                    title="Speech構成分析を再評価"
+                  >
+                    {speechAiLoading ? "再評価中..." : "再評価"}
+                  </button>
+                ) : undefined
               }
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 再評価の反映まで1~2分程度かかる場合があります。</div>
-              <div style={{ height: 10 }} />
-
-              {speechAiError ? (
-                <div style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 12, padding: 10, background: "#fff", fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>
+              {!isPro ? (
+                <LockCard
+                  title="Speech分析はPro限定"
+                  body={
+                    "無料版では総合スコア・4項目評価・面接官コメントまで利用できます。\n" +
+                    "Speechの構成分析と改善例はProで解放されます。"
+                  }
+                />
+              ) : speechAiError ? (
+                <div
+                  style={{
+                    border: "1px solid rgba(0,0,0,0.12)",
+                    borderRadius: 12,
+                    padding: 10,
+                    background: "#fff",
+                    fontSize: 13,
+                    whiteSpace: "pre-wrap",
+                    color: "#111827",
+                  }}
+                >
                   {speechAiError}
                 </div>
               ) : speechAi ? (
@@ -845,7 +1130,40 @@ export default function ResultClient() {
             </Accordion>
 
             <Accordion icon={<span>🔥</span>} title="Q&A 回答ログ（改善例付き）">
-              {qaAnalysis.length === 0 ? (
+              {!isPro ? (
+                <div style={{ display: "grid", gap: 12 }}>
+                  {qaAnalysis.length === 0 ? (
+                    <div style={{ fontSize: 13, color: "#374151" }}>（Q&A分析データがありません）</div>
+                  ) : (
+                    qaAnalysis.map((q, i) => (
+                      <div
+                        key={i}
+                        style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}
+                      >
+                        <div style={{ fontWeight: 900, fontSize: 13 }}>Q{i + 1}. {q.questionText}</div>
+                        <div style={{ marginTop: 10, fontSize: 13 }}>
+                          <b>Your answer:</b>
+                          <div
+                            style={{
+                              marginTop: 6,
+                              padding: 10,
+                              border: "1px solid rgba(0,0,0,0.12)",
+                              borderRadius: 12,
+                              background: "#f8fafc",
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {q.answerText}
+                          </div>
+                        </div>
+                        <div style={{ marginTop: 10 }}>
+                          <LockCard title="改善例はPro限定" body="Q&Aごとの改善例はProで表示されます。" />
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : qaAnalysis.length === 0 ? (
                 <div style={{ fontSize: 13, color: "#374151" }}>（Q&A分析データがありません）</div>
               ) : (
                 <div style={{ display: "grid", gap: 12 }}>
@@ -856,19 +1174,40 @@ export default function ResultClient() {
                         : "（改善例なし）";
 
                     return (
-                      <div key={i} style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}>
+                      <div
+                        key={i}
+                        style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}
+                      >
                         <div style={{ fontWeight: 900, fontSize: 13 }}>Q{i + 1}. {q.questionText}</div>
 
                         <div style={{ marginTop: 10, fontSize: 13 }}>
                           <b>Your answer:</b>
-                          <div style={{ marginTop: 6, padding: 10, border: "1px solid rgba(0,0,0,0.12)", borderRadius: 12, background: "#f8fafc", whiteSpace: "pre-wrap" }}>
+                          <div
+                            style={{
+                              marginTop: 6,
+                              padding: 10,
+                              border: "1px solid rgba(0,0,0,0.12)",
+                              borderRadius: 12,
+                              background: "#f8fafc",
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
                             {q.answerText}
                           </div>
                         </div>
 
                         <div style={{ marginTop: 10, fontSize: 13 }}>
                           <b>改善例：</b>
-                          <div style={{ marginTop: 6, padding: 10, border: "1px solid rgba(0,0,0,0.12)", borderRadius: 12, background: "#fff", whiteSpace: "pre-wrap" }}>
+                          <div
+                            style={{
+                              marginTop: 6,
+                              padding: 10,
+                              border: "1px solid rgba(0,0,0,0.12)",
+                              borderRadius: 12,
+                              background: "#fff",
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
                             {ex}
                           </div>
                         </div>
@@ -879,7 +1218,25 @@ export default function ResultClient() {
               )}
             </Accordion>
 
-            <Accordion icon={<span>🗣</span>} title="面接官コメント">
+            <Accordion
+              icon={<span>🗣</span>}
+              title="面接官コメント"
+              right={
+                <button
+                  type="button"
+                  onClick={refreshCommentOnly}
+                  disabled={commentLoading}
+                  style={{ ...pillBtn, opacity: commentLoading ? 0.6 : 1 }}
+                  title="最後の面接官コメントだけ再評価"
+                >
+                  {commentLoading
+                    ? "再評価中..."
+                    : isPro
+                    ? "コメント再評価"
+                    : `再評価（残り${commentRemaining}回）`}
+                </button>
+              }
+            >
               <div style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}>
                 <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>
                   {asString(sessionData?.scoreResult?.comment) || "（コメントなし）"}
@@ -890,7 +1247,7 @@ export default function ResultClient() {
         </div>
 
         <div style={{ flex: "none", paddingTop: 6, paddingBottom: 10 }}>
-          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
             <Link
               href="/"
               style={{
@@ -920,24 +1277,23 @@ export default function ResultClient() {
               </button>
             )}
 
-
-            {!fromRecords && (
-            <button
-              type="button"
-              onClick={onClickSave}
-              disabled={saveLoading || !sessionData}
-              style={{
-                ...pillBtn,
-                padding: "10px 14px",
-                borderRadius: 14,
-                borderColor: goldBorderStrong,
-                boxShadow: "0 10px 24px rgba(0,0,0,0.45)",
-                opacity: saveLoading || !sessionData ? 0.6 : 1,
-              }}
-              title="この結果を最近の記録に保存"
-            >
-              {saveLoading ? "保存中..." : saveDone ? "保存しました" : "保存"}
-            </button>
+            {!fromRecords && isPro && (
+              <button
+                type="button"
+                onClick={onClickSave}
+                disabled={saveLoading || !sessionData}
+                style={{
+                  ...pillBtn,
+                  padding: "10px 14px",
+                  borderRadius: 14,
+                  borderColor: goldBorderStrong,
+                  boxShadow: "0 10px 24px rgba(0,0,0,0.45)",
+                  opacity: saveLoading || !sessionData ? 0.6 : 1,
+                }}
+                title="この結果を最近の記録に保存"
+              >
+                {saveLoading ? "保存中..." : saveDone ? "保存しました" : "保存"}
+              </button>
             )}
           </div>
         </div>

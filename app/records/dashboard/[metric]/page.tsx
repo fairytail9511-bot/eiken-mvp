@@ -18,17 +18,24 @@ type SavedRecord = {
   session: any;
 };
 
+type Metric =
+  | "total"
+  | "short_speech"
+  | "interaction"
+  | "grammar_vocab"
+  | "pronunciation_fluency";
+
+type RangeKey = "1m" | "3m" | "6m" | "all";
+
 const LS_KEY = "eiken_mvp_recentRecords";
 
-const METRIC_LABEL: Record<string, string> = {
+const METRIC_LABEL: Record<Metric, string> = {
   total: "総合点",
   short_speech: "Short Speech",
   interaction: "Interaction",
   grammar_vocab: "Grammar & Vocabulary",
   pronunciation_fluency: "Pronunciation",
 };
-
-type RangeKey = "1m" | "3m" | "6m" | "all";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -84,7 +91,7 @@ function formatDayLabel(d: Date) {
 export default function MetricPage() {
   const params = useParams();
   const router = useRouter();
-  const metric = params.metric as string;
+  const metric = (params.metric as Metric) || "total";
 
   const [records, setRecords] = useState<SavedRecord[]>([]);
   const [range, setRange] = useState<RangeKey>("3m");
@@ -108,10 +115,6 @@ export default function MetricPage() {
   const maxScore = metric === "total" ? 40 : 10;
   const title = METRIC_LABEL[metric] ?? "評価";
 
-  // ✅ 1ヶ月だけラベル表示、それ以外は非表示
-  const showDenseLabels = range === "1m";
-
-  // ===== 期間（当月含む） =====
   const rangeWindow = useMemo(() => {
     const now = new Date();
     const thisMonthStart = startOfMonth(now);
@@ -127,7 +130,9 @@ export default function MetricPage() {
       const times = (records ?? [])
         .map((r) => new Date(r.savedAt).getTime())
         .filter((t) => Number.isFinite(t));
+
       if (times.length === 0) return { from: thisMonthStart, to };
+
       const minT = Math.min(...times);
       const minD = new Date(minT);
       return { from: startOfMonth(minD), to };
@@ -136,7 +141,6 @@ export default function MetricPage() {
     return { from, to };
   }, [range, records]);
 
-  // ===== “日付軸”上に、面接した日の点だけ載せる =====
   const points = useMemo(() => {
     const src = Array.isArray(records) ? records : [];
     if (src.length === 0) return [];
@@ -150,7 +154,6 @@ export default function MetricPage() {
       return Number.isFinite(t) && t >= fromMs && t <= toMs;
     });
 
-    // 同日複数は最新のみ
     const byDay = new Map<string, SavedRecord>();
     for (const r of inRange) {
       const d = startOfDay(new Date(r.savedAt));
@@ -190,7 +193,6 @@ export default function MetricPage() {
     return Math.round((sum / points.length) * 10) / 10;
   }, [points]);
 
-  // ===== チャート計算（“期間のfrom〜to” をX軸に固定） =====
   const chart = useMemo(() => {
     const w = 700;
     const h = 1000;
@@ -212,12 +214,12 @@ export default function MetricPage() {
       if (xMax === xMin) return padL + innerW / 2;
       return padL + ((x - xMin) / (xMax - xMin)) * innerW;
     };
+
     const yScale = (y: number) => {
       const yy = clamp(y, yMin, yMax);
       return padT + (1 - (yy - yMin) / (yMax - yMin)) * innerH;
     };
 
-    // 月境界（縦線）+ 月ラベル
     const monthLines: { x: number; label: string }[] = [];
     const m0 = startOfMonth(rangeWindow.from);
     for (let cur = new Date(m0); cur.getTime() <= xMax; cur = addMonths(cur, 1)) {
@@ -238,9 +240,10 @@ export default function MetricPage() {
     const pathD =
       pts.length === 0
         ? ""
-        : pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`).join(" ");
+        : pts
+            .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+            .join(" ");
 
-    // Y目盛
     const steps = 5;
     const yTicks = Array.from({ length: steps + 1 }).map((_, i) => {
       const v = Math.round((yMax / steps) * i);
@@ -248,11 +251,10 @@ export default function MetricPage() {
       return { v, y };
     });
 
-    // X（日付）ラベル：表示するのは1ヶ月のときだけ（間引き）
     const maxDayLabels = 8;
     const every = Math.max(1, Math.ceil(pts.length / maxDayLabels));
     const dayLabels = pts
-      .map((p, i) => ({ x: p.x, text: formatDayLabel(p.dateObj) }))
+      .map((p) => ({ x: p.x, text: formatDayLabel(p.dateObj) }))
       .filter((_, i) => i % every === 0 || i === pts.length - 1);
 
     return {
@@ -271,37 +273,36 @@ export default function MetricPage() {
     };
   }, [points, maxScore, rangeWindow]);
 
-  // ===== Theme =====
   const gold = "rgba(234, 179, 8, 0.70)";
-  const goldStrong = "rgba(234, 179, 8, 0.90)";
-  const glass = "rgba(255,255,255,0.08)";
-  const lineSoft = "rgba(255,255,255,0.16)";
+  const goldSoft = "rgba(234, 179, 8, 0.22)";
+  const goldStrong = "rgba(253, 224, 71, 0.95)";
+  const lineSoft = "rgba(255,255,255,0.14)";
   const textSub = "rgba(255,255,255,0.72)";
+  const glass = "rgba(255,255,255,0.08)";
 
   const pageStyle: React.CSSProperties = {
-    height: "100vh",
+    minHeight: "100vh",
     display: "flex",
     justifyContent: "center",
-    background: "#030b20ff",
-    padding: 0,
-    overflow: "hidden",
+    background: "#010920ff",
+    color: "#fff",
+    padding: 16,
   };
 
   const shell: React.CSSProperties = {
     width: "100%",
-    maxWidth: 520,
-    height: "100vh",
-    padding: 10,
+    maxWidth: 560,
     display: "flex",
     flexDirection: "column",
-    gap: 8,
-    overflow: "hidden",
+    gap: 14,
+    paddingTop: 10,
+    paddingBottom: 18,
+    minHeight: "calc(100vh - 32px)",
   };
 
   const topRow: React.CSSProperties = {
     display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
+    flexDirection: "column",
     gap: 10,
     flex: "none",
   };
@@ -309,49 +310,47 @@ export default function MetricPage() {
   const titleStyle: React.CSSProperties = {
     fontSize: 28,
     fontWeight: 900,
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
     color: "white",
+    textShadow: "0 18px 36px rgba(0,0,0,0.55)",
     margin: 0,
-    lineHeight: 1.1,
   };
 
   const smallNavRow: React.CSSProperties = {
     display: "flex",
-    gap: 8,
-    flex: "none",
+    gap: 10,
+    flexWrap: "wrap",
   };
 
   const smallNavBtn: React.CSSProperties = {
-    borderRadius: 12,
+    borderRadius: 14,
     border: `1px solid ${gold}`,
-    background: "rgba(255,255,255,0.06)",
+    background: glass,
+    boxShadow: `0 10px 24px rgba(0,0,0,0.35), inset 0 0 0 1px ${goldSoft}`,
+    padding: "10px 12px",
     color: "white",
-    padding: "7px 10px",
     fontWeight: 900,
-    fontSize: 12,
+    fontSize: 13,
     cursor: "pointer",
-    boxShadow: "0 10px 18px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.06)",
-    whiteSpace: "nowrap",
   };
 
   const rangeRow: React.CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "repeat(4, 1fr)",
+    display: "flex",
     gap: 8,
+    flexWrap: "wrap",
     flex: "none",
   };
 
   const rangeBtn = (active: boolean): React.CSSProperties => ({
-    borderRadius: 12,
-    border: `1px solid ${active ? goldStrong : "rgba(255,255,255,0.18)"}`,
-    background: active ? "rgba(3, 7, 255, 0.45)" : "rgba(255,255,255,0.06)",
-    color: active ? "white" : "rgba(255,255,255,0.88)",
-    padding: "10px 6px",
+    borderRadius: 999,
+    border: `1px solid ${active ? goldStrong : gold}`,
+    background: active ? "rgba(234,179,8,0.18)" : glass,
+    boxShadow: `0 10px 24px rgba(0,0,0,0.30), inset 0 0 0 1px ${goldSoft}`,
+    padding: "9px 12px",
+    color: active ? "#fff7cc" : "#fff",
     fontWeight: 900,
-    fontSize: 14,
+    fontSize: 13,
     cursor: "pointer",
-    boxShadow: active ? "0 10px 18px rgba(0,0,0,0.45)" : "inset 0 0 0 1px rgba(255,255,255,0.04)",
-    whiteSpace: "nowrap",
   });
 
   const panel: React.CSSProperties = {
@@ -392,11 +391,11 @@ export default function MetricPage() {
   const avgLabel: React.CSSProperties = {
     color: goldStrong,
     fontWeight: 900,
-    fontSize: 20,
+    fontSize: 14,
   };
 
   const avgValue: React.CSSProperties = {
-    fontSize: 25,
+    fontSize: 22,
     fontWeight: 900,
     color: goldStrong,
     letterSpacing: 0.5,
@@ -412,7 +411,7 @@ export default function MetricPage() {
             <button type="button" onClick={() => router.push("/")} style={smallNavBtn}>
               トップ画面へ戻る
             </button>
-            <button type="button" onClick={() => router.back()} style={smallNavBtn}>
+            <button type="button" onClick={() => router.push("/records/dashboard")} style={smallNavBtn}>
               戻る
             </button>
           </div>
@@ -459,7 +458,18 @@ export default function MetricPage() {
         <div style={panel}>
           <div style={chartWrap}>
             {points.length === 0 ? (
-              <div style={{ fontSize: 14, color: textSub }}>データがありません。</div>
+              <div
+                style={{
+                  fontSize: 14,
+                  color: textSub,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "100%",
+                }}
+              >
+                データがありません。
+              </div>
             ) : (
               <svg
                 width="100%"
@@ -470,7 +480,6 @@ export default function MetricPage() {
                 style={{ width: "100%", height: "100%", display: "block" }}
                 preserveAspectRatio="xMidYMid meet"
               >
-                {/* month vertical lines + month labels */}
                 {chart.monthLines.map((m, idx) => (
                   <g key={idx}>
                     <line
@@ -481,18 +490,12 @@ export default function MetricPage() {
                       stroke="rgba(255,255,255,0.10)"
                       strokeWidth={1}
                     />
-                    <text
-                      x={m.x + 4}
-                      y={chart.padT - 18}
-                      fontSize={27}
-                      fill="rgba(255,255,255,0.60)"
-                    >
+                    <text x={m.x + 4} y={chart.padT - 18} fontSize={27} fill="rgba(255,255,255,0.60)">
                       {m.label}
                     </text>
                   </g>
                 ))}
 
-                {/* y grid + labels */}
                 {chart.yTicks.map((t, idx) => (
                   <g key={idx}>
                     <line
@@ -515,7 +518,6 @@ export default function MetricPage() {
                   </g>
                 ))}
 
-                {/* axes */}
                 <line
                   x1={chart.padL}
                   x2={chart.padL}
@@ -533,12 +535,10 @@ export default function MetricPage() {
                   strokeWidth={1}
                 />
 
-                {/* line */}
                 {chart.pathD ? (
                   <path d={chart.pathD} fill="none" stroke="rgba(34,197,94,0.85)" strokeWidth={3} />
                 ) : null}
 
-                {/* points (+ score labels only when 1m) */}
                 {chart.pts.map((p) => (
                   <g key={p.key}>
                     <circle
@@ -549,7 +549,7 @@ export default function MetricPage() {
                       stroke="rgba(34,197,94,0.45)"
                       strokeWidth={2}
                     />
-                    {showDenseLabels ? (
+                    {range === "1m" ? (
                       <text
                         x={p.x}
                         y={p.y - 14}
@@ -567,17 +567,9 @@ export default function MetricPage() {
                   </g>
                 ))}
 
-                {/* day labels only when 1m */}
-                {showDenseLabels
+                {range === "1m"
                   ? chart.dayLabels.map((d, idx) => (
-                      <text
-                        key={idx}
-                        x={d.x}
-                        y={chart.h - 24}
-                        fontSize={22}
-                        textAnchor="middle"
-                        fill={textSub}
-                      >
+                      <text key={idx} x={d.x} y={chart.h - 24} fontSize={22} textAnchor="middle" fill={textSub}>
                         {d.text}
                       </text>
                     ))
@@ -589,8 +581,7 @@ export default function MetricPage() {
           <div style={avgRow}>
             <div style={avgLabel}>平均点</div>
             <div style={avgValue}>
-              {avg}
-              {metric === "total" ? " / 40" : " / 10"}
+              {avg} / {maxScore}
             </div>
           </div>
         </div>
