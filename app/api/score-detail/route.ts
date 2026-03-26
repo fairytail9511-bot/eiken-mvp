@@ -97,27 +97,80 @@ function ensureJapaneseBlocks(ret: { summary: string; blocks: ThreeBlock }) {
   return ret;
 }
 
-// Grammar & Vocabulary は英字混入で落ちやすいため、空でなければ採用する緩和版
-function ensureLooseBlocks(ret: { summary: string; blocks: ThreeBlock }) {
+function ensureLooseBlocks(
+  ret: { summary: string; blocks: ThreeBlock },
+  fallback: ThreeBlock,
+  fallbackSummary: string
+) {
   const summary = String(ret?.summary ?? "").trim();
   const didWell = String(ret?.blocks?.didWell ?? "").trim();
   const missing = String(ret?.blocks?.missing ?? "").trim();
   const whyThisScore = String(ret?.blocks?.whyThisScore ?? "").trim();
 
-  if (!summary) throw new Error("Empty summary");
-  if (!didWell && !missing && !whyThisScore) throw new Error("Empty blocks");
+  if (!summary && !didWell && !missing && !whyThisScore) {
+    throw new Error("Empty summary and blocks");
+  }
 
   return {
-    summary,
+    summary: summary || fallbackSummary,
     blocks: {
-      didWell: didWell || "文法や語彙の基礎は一定程度保たれていましたが、より自然で精度の高い表現に伸ばす余地があります。",
-      missing: missing || "語彙の幅や表現の自然さに改善余地があり、より具体的で適切な語句選択を意識すると評価が安定します。",
-      whyThisScore:
-        whyThisScore ||
-        "内容は伝わっている一方で、文法の安定性や語彙の精度にばらつきが見られたため、この評価になりました。",
+      didWell: didWell || fallback.didWell,
+      missing: missing || fallback.missing,
+      whyThisScore: whyThisScore || fallback.whyThisScore,
     },
   };
 }
+
+const FALLBACKS = {
+  short_speech: {
+    summary:
+      "主張の方向性は伝わっていましたが、理由や具体例、結論のまとまりをさらに明確にすると評価が安定します。",
+    blocks: {
+      didWell:
+        "自分の立場を示しながら話を進めようとしていた点は評価できます。",
+      missing:
+        "理由や具体例のつながりをよりはっきりさせ、結論まで一貫してまとめるとさらに良くなります。",
+      whyThisScore:
+        "内容は概ね伝わる一方で、構成の明確さと具体性に改善余地があったため、この評価になりました。",
+    },
+  },
+  interaction: {
+    summary:
+      "質問には答えようとしていましたが、より直接的で具体的な返答にすると受け答えの評価が安定します。",
+    blocks: {
+      didWell:
+        "質問の意図を捉えて返答しようとしていた点は評価できます。",
+      missing:
+        "答えを先に明確に述べたうえで、理由や具体例を短く足すと、より説得力のある応答になります。",
+      whyThisScore:
+        "受け答えは成立していましたが、直答性や具体性、展開の明確さに改善余地があったため、この評価になりました。",
+    },
+  },
+  grammar_vocab: {
+    summary:
+      "文法や語彙の基礎は一定程度保たれていましたが、表現の自然さと精度をさらに高める余地があります。",
+    blocks: {
+      didWell:
+        "基本的な文構造で内容を伝えようとしていた点は評価できます。",
+      missing:
+        "語彙の幅や表現の自然さ、文法の安定性に改善余地があります。",
+      whyThisScore:
+        "内容は概ね伝わる一方で、文法や語彙の精度にばらつきがあり、より洗練された表現が求められるためこの評価になりました。",
+    },
+  },
+  pronunciation_fluency: {
+    summary:
+      "全体として意味は伝わっていましたが、流れの滑らかさや明瞭さを整えるとさらに評価が安定します。",
+    blocks: {
+      didWell:
+        "最後まで発話を続け、内容を伝えようとしていた点は評価できます。",
+      missing:
+        "詰まりや言い直しを減らし、区切りをより自然にすると聞き取りやすさが向上します。",
+      whyThisScore:
+        "発話は概ね成立していましたが、流暢さや明瞭さに改善余地が見られたため、この評価になりました。",
+    },
+  },
+};
 
 function extractSpeechFromTranscript(transcript: string) {
   return extractBetween(transcript, "SPEECH:", "Q&A:").trim();
@@ -428,15 +481,52 @@ export async function POST(req: Request) {
       withRetry(async () => ensureJapaneseBlocks(await scorePronunciationAI({ client, topic, transcript })), 2),
     ]);
 
-    // Grammar & Vocabulary だけは厳格版で失敗した場合に緩和版でもう一度救済
-    let grammarRecovered:
-      | { summary: string; blocks: ThreeBlock }
-      | null = null;
+    let shortSpeechRecovered: { summary: string; blocks: ThreeBlock } | null = null;
+    let interactionRecovered: { summary: string; blocks: ThreeBlock } | null = null;
+    let grammarRecovered: { summary: string; blocks: ThreeBlock } | null = null;
+    let pronunciationRecovered: { summary: string; blocks: ThreeBlock } | null = null;
+
+    if (shortSpeech.status !== "fulfilled") {
+      try {
+        shortSpeechRecovered = await withRetry(
+          async ()=>
+            ensureLooseBlocks(
+              await scoreShortSpeechAI({ client, topic, transcript }),
+              FALLBACKS.short_speech.blocks,
+              FALLBACKS.short_speech.summary
+            ),
+          2
+        );
+      } catch {
+        shortSpeechRecovered = null;
+      }
+    }
+
+    if (interaction.status !== "fulfilled") {
+      try {
+        interactionRecovered = await withRetry(
+          async ()=>
+            ensureLooseBlocks(
+              await scoreInteractionAI({ client, topic, transcript }),
+              FALLBACKS.interaction.blocks,
+              FALLBACKS.interaction.summary
+            ),
+          2
+        );
+      } catch {
+        interactionRecovered = null;
+      }
+    }
 
     if (grammarVocab.status !== "fulfilled") {
       try {
         grammarRecovered = await withRetry(
-          async () => ensureLooseBlocks(await scoreGrammarVocabAI({ client, topic, transcript })),
+          async ()=>
+            ensureLooseBlocks(
+              await scoreGrammarVocabAI({ client, topic, transcript }),
+              FALLBACKS.grammar_vocab.blocks,
+              FALLBACKS.grammar_vocab.summary
+            ),
           2
         );
       } catch {
@@ -444,48 +534,58 @@ export async function POST(req: Request) {
       }
     }
 
+    if (pronunciation.status !== "fulfilled") {
+      try {
+        pronunciationRecovered = await withRetry(
+          async ()=>
+            ensureLooseBlocks(
+              await scorePronunciationAI({ client, topic, transcript }),
+              FALLBACKS.pronunciation_fluency.blocks,
+              FALLBACKS.pronunciation_fluency.summary
+            ),
+          2
+        );
+      } catch {
+        pronunciationRecovered = null;
+      }
+    }
+
     const section_feedback = {
       short_speech:
         shortSpeech.status === "fulfilled"
           ? shortSpeech.value.summary
-          : "（再評価でもコメントを生成できませんでした）",
+          : shortSpeechRecovered?.summary || FALLBACKS.short_speech.summary,
       interaction:
         interaction.status === "fulfilled"
           ? interaction.value.summary
-          : "（再評価でもコメントを生成できませんでした）",
+          : interactionRecovered?.summary || FALLBACKS.interaction.summary,
       grammar_vocab:
         grammarVocab.status === "fulfilled"
           ? grammarVocab.value.summary
-          : grammarRecovered?.summary ||
-            "文法や語彙の基礎は一定程度保たれていましたが、表現の自然さと精度をさらに高める余地があります。",
+          : grammarRecovered?.summary || FALLBACKS.grammar_vocab.summary,
       pronunciation_fluency:
         pronunciation.status === "fulfilled"
           ? pronunciation.value.summary
-          : "（再評価でもコメントを生成できませんでした）",
+          : pronunciationRecovered?.summary || FALLBACKS.pronunciation_fluency.summary,
     };
 
     const three_blocks = {
       short_speech:
         shortSpeech.status === "fulfilled"
           ? shortSpeech.value.blocks
-          : normalizeBlocks(undefined),
+          : shortSpeechRecovered?.blocks || FALLBACKS.short_speech.blocks,
       interaction:
         interaction.status === "fulfilled"
           ? interaction.value.blocks
-          : normalizeBlocks(undefined),
+          : interactionRecovered?.blocks || FALLBACKS.interaction.blocks,
       grammar_vocab:
         grammarVocab.status === "fulfilled"
           ? grammarVocab.value.blocks
-          : grammarRecovered?.blocks || {
-              didWell: "基本的な文構造で内容を伝えようとしていた点は評価できます。",
-              missing: "語彙の幅や表現の自然さ、文法の安定性に改善余地があります。",
-              whyThisScore:
-                "内容は概ね伝わる一方で、文法や語彙の精度にばらつきがあり、より洗練された表現が求められるためこの評価になりました。",
-            },
+          : grammarRecovered?.blocks || FALLBACKS.grammar_vocab.blocks,
       pronunciation_fluency:
         pronunciation.status === "fulfilled"
           ? pronunciation.value.blocks
-          : normalizeBlocks(undefined),
+          : pronunciationRecovered?.blocks || FALLBACKS.pronunciation_fluency.blocks,
     };
 
     return NextResponse.json({
