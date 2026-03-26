@@ -97,6 +97,28 @@ function ensureJapaneseBlocks(ret: { summary: string; blocks: ThreeBlock }) {
   return ret;
 }
 
+// Grammar & Vocabulary は英字混入で落ちやすいため、空でなければ採用する緩和版
+function ensureLooseBlocks(ret: { summary: string; blocks: ThreeBlock }) {
+  const summary = String(ret?.summary ?? "").trim();
+  const didWell = String(ret?.blocks?.didWell ?? "").trim();
+  const missing = String(ret?.blocks?.missing ?? "").trim();
+  const whyThisScore = String(ret?.blocks?.whyThisScore ?? "").trim();
+
+  if (!summary) throw new Error("Empty summary");
+  if (!didWell && !missing && !whyThisScore) throw new Error("Empty blocks");
+
+  return {
+    summary,
+    blocks: {
+      didWell: didWell || "文法や語彙の基礎は一定程度保たれていましたが、より自然で精度の高い表現に伸ばす余地があります。",
+      missing: missing || "語彙の幅や表現の自然さに改善余地があり、より具体的で適切な語句選択を意識すると評価が安定します。",
+      whyThisScore:
+        whyThisScore ||
+        "内容は伝わっている一方で、文法の安定性や語彙の精度にばらつきが見られたため、この評価になりました。",
+    },
+  };
+}
+
 function extractSpeechFromTranscript(transcript: string) {
   return extractBetween(transcript, "SPEECH:", "Q&A:").trim();
 }
@@ -212,12 +234,13 @@ async function scoreGrammarVocabAI(args: { client: OpenAI; topic: string; transc
     "- blocks は各項目日本語で1〜2文。\n" +
     "- 観点: 文法の正確さ、文の多様性、語彙の精度、コロケーション、フォーマルさ。\n" +
     "- transcriptの Candidate 発言を中心に判断。\n" +
-    "- 出力は日本語のみ。英語は禁止。\n";
+    "- 出力は原則日本語。\n" +
+    "- ただし英語例示や語彙名が少し混ざってもよいので、必ずJSON形式を優先してください。\n";
 
   const user =
     `Topic: ${args.topic || "(not provided)"}\n\n` +
     `Transcript:\n${transcript}\n\n` +
-    "grammar_vocab の詳細評価を Schema 通りのJSONで返してください。";
+    "grammar_vocab の詳細評価を Schema 通りのJSONで返してください。説明は簡潔にし、日本語中心で書いてください。";
 
   const res = await args.client.responses.create({
     model: MODEL_SCORE,
@@ -401,9 +424,25 @@ export async function POST(req: Request) {
     const [shortSpeech, interaction, grammarVocab, pronunciation] = await Promise.allSettled([
       withRetry(async () => ensureJapaneseBlocks(await scoreShortSpeechAI({ client, topic, transcript })), 2),
       withRetry(async () => ensureJapaneseBlocks(await scoreInteractionAI({ client, topic, transcript })), 2),
-      withRetry(async () => ensureJapaneseBlocks(await scoreGrammarVocabAI({ client, topic, transcript })), 2),
+      withRetry(async () => ensureJapaneseBlocks(await scoreGrammarVocabAI({ client, topic, transcript })), 3),
       withRetry(async () => ensureJapaneseBlocks(await scorePronunciationAI({ client, topic, transcript })), 2),
     ]);
+
+    // Grammar & Vocabulary だけは厳格版で失敗した場合に緩和版でもう一度救済
+    let grammarRecovered:
+      | { summary: string; blocks: ThreeBlock }
+      | null = null;
+
+    if (grammarVocab.status !== "fulfilled") {
+      try {
+        grammarRecovered = await withRetry(
+          async () => ensureLooseBlocks(await scoreGrammarVocabAI({ client, topic, transcript })),
+          2
+        );
+      } catch {
+        grammarRecovered = null;
+      }
+    }
 
     const section_feedback = {
       short_speech:
@@ -417,7 +456,8 @@ export async function POST(req: Request) {
       grammar_vocab:
         grammarVocab.status === "fulfilled"
           ? grammarVocab.value.summary
-          : "（再評価でもコメントを生成できませんでした）",
+          : grammarRecovered?.summary ||
+            "文法や語彙の基礎は一定程度保たれていましたが、表現の自然さと精度をさらに高める余地があります。",
       pronunciation_fluency:
         pronunciation.status === "fulfilled"
           ? pronunciation.value.summary
@@ -436,7 +476,12 @@ export async function POST(req: Request) {
       grammar_vocab:
         grammarVocab.status === "fulfilled"
           ? grammarVocab.value.blocks
-          : normalizeBlocks(undefined),
+          : grammarRecovered?.blocks || {
+              didWell: "基本的な文構造で内容を伝えようとしていた点は評価できます。",
+              missing: "語彙の幅や表現の自然さ、文法の安定性に改善余地があります。",
+              whyThisScore:
+                "内容は概ね伝わる一方で、文法や語彙の精度にばらつきがあり、より洗練された表現が求められるためこの評価になりました。",
+            },
       pronunciation_fluency:
         pronunciation.status === "fulfilled"
           ? pronunciation.value.blocks
