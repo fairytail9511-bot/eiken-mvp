@@ -100,6 +100,10 @@ const LS_KEYS = {
   TRIAL_USED: "speaking_trial_used",
 } as const;
 
+const SESSION_KEYS = {
+  RESULT_MARKED_PREFIX: "speaking_result_marked_",
+} as const;
+
 const REFRESH_LIMIT_FREE = 3;
 const RECENT_LIMIT_PRO = 20;
 const RECENT_LIMIT_FREE = 5;
@@ -327,6 +331,11 @@ function setRefreshUsed(session: SessionData | null, target: "sections" | "comme
   } catch {}
 }
 
+function resultSessionMarkerKey(session: SessionData | null) {
+  const seed = `${asString(session?.topic)}__${asString(session?.finishedAt)}__${asInt(session?.scoreResult?.total)}`;
+  return `${SESSION_KEYS.RESULT_MARKED_PREFIX}${hashFNV1a32(seed)}`;
+}
+
 /* =====================
    Styles
 ===================== */
@@ -544,9 +553,11 @@ function ThreeBlockCard({
 function LockCard({
   title,
   body,
+  onGoPlans,
 }: {
   title: string;
   body: string;
+  onGoPlans?: () => void;
 }) {
   return (
     <div
@@ -561,6 +572,19 @@ function LockCard({
       <div style={{ fontSize: 13, color: "#374151", whiteSpace: "pre-wrap", lineHeight: 1.7, marginTop: 8 }}>
         {body}
       </div>
+      {onGoPlans ? (
+        <button
+          type="button"
+          onClick={onGoPlans}
+          style={{
+            marginTop: 10,
+            ...pillBtn,
+            borderRadius: 12,
+          }}
+        >
+          有料プランを見る
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -578,6 +602,7 @@ export default function ResultClient() {
   const [elapsed, setElapsed] = useState("");
 
   const [isPro, setIsPro] = useState(false);
+  const [isFirstTrialAccess, setIsFirstTrialAccess] = useState(false);
 
   const [speechAi, setSpeechAi] = useState<SpeechAIFeedback | null>(null);
   const [speechAiLoading, setSpeechAiLoading] = useState(false);
@@ -598,7 +623,8 @@ export default function ResultClient() {
 
   useEffect(() => {
     try {
-      setIsPro(getIsPro());
+      const pro = getIsPro();
+      setIsPro(pro);
 
       const raw = localStorage.getItem(LS_KEYS.LAST_SESSION);
       if (!raw) {
@@ -637,21 +663,39 @@ export default function ResultClient() {
         }
       } catch {}
 
-      if (nextSession.accessMode === "trial") {
+      const markerKey = resultSessionMarkerKey(nextSession);
+      let currentEntryIsFirstTrial = false;
+
+      if (!fromRecords && !pro) {
+        const alreadyMarkedThisResult =
+          typeof window !== "undefined" ? sessionStorage.getItem(markerKey) === "1" : false;
+        const trialAlreadyUsed = localStorage.getItem(LS_KEYS.TRIAL_USED) === "1";
+
+        if (!alreadyMarkedThisResult && !trialAlreadyUsed) {
+          currentEntryIsFirstTrial = true;
+        }
+
+        if (nextSession.accessMode === "trial" || currentEntryIsFirstTrial) {
+          try {
+            localStorage.setItem(LS_KEYS.TRIAL_USED, "1");
+          } catch {}
+        }
+
         try {
-          localStorage.setItem(LS_KEYS.TRIAL_USED, "1");
+          sessionStorage.setItem(markerKey, "1");
         } catch {}
       }
 
+      setIsFirstTrialAccess(currentEntryIsFirstTrial || nextSession.accessMode === "trial");
       setSessionData(nextSession);
       setSectionsRefreshUsed(getRefreshUsed(nextSession, "sections"));
       setCommentRefreshUsed(getRefreshUsed(nextSession, "comment"));
     } catch {
       setError("結果データの読み込みに失敗しました。");
     }
-  }, []);
+  }, [fromRecords]);
 
-  const premiumAccess = isPro || sessionData?.accessMode === "trial";
+  const premiumAccess = isPro || isFirstTrialAccess || sessionData?.accessMode === "trial";
 
   useEffect(() => {
     if (!sessionData || fromRecords) return;
@@ -693,6 +737,10 @@ export default function ResultClient() {
       localStorage.setItem(LS_KEYS.LAST_SESSION, JSON.stringify(next));
     } catch {}
     setSessionData(next);
+  }
+
+  function goPlans() {
+    router.push("/");
   }
 
   async function fetchSpeechAiOnce(force: boolean) {
@@ -1083,6 +1131,7 @@ export default function ResultClient() {
                     "無料版では総合スコア・4項目評価・面接官コメントまで利用できます。\n" +
                     "Speechの構成分析と改善例は初回フル体験またはProで解放されます。"
                   }
+                  onGoPlans={goPlans}
                 />
               ) : speechAiError ? (
                 <div
@@ -1155,7 +1204,9 @@ export default function ResultClient() {
                         key={i}
                         style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}
                       >
-                        <div style={{ fontWeight: 900, fontSize: 13 }}>Q{i + 1}. {q.questionText}</div>
+                        <div style={{ fontWeight: 900, fontSize: 13 }}>
+                          Q{i + 1}. {q.questionText}
+                        </div>
                         <div style={{ marginTop: 10, fontSize: 13 }}>
                           <b>Your answer:</b>
                           <div
@@ -1172,7 +1223,11 @@ export default function ResultClient() {
                           </div>
                         </div>
                         <div style={{ marginTop: 10 }}>
-                          <LockCard title="改善例は初回フル体験 / Proで表示" body="Q&Aごとの改善例は初回フル体験またはProで表示されます。" />
+                          <LockCard
+                            title="改善例は初回フル体験 / Proで表示"
+                            body="Q&Aごとの改善例は初回フル体験またはProで表示されます。"
+                            onGoPlans={goPlans}
+                          />
                         </div>
                       </div>
                     ))
@@ -1193,7 +1248,9 @@ export default function ResultClient() {
                         key={i}
                         style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}
                       >
-                        <div style={{ fontWeight: 900, fontSize: 13 }}>Q{i + 1}. {q.questionText}</div>
+                        <div style={{ fontWeight: 900, fontSize: 13 }}>
+                          Q{i + 1}. {q.questionText}
+                        </div>
 
                         <div style={{ marginTop: 10, fontSize: 13 }}>
                           <b>Your answer:</b>
