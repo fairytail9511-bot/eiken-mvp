@@ -96,8 +96,8 @@ const LS_KEYS = {
   RECENT_RECORDS: "eiken_mvp_recentRecords",
   INTERVIEW_START: "eiken_mvp_interview_start",
   FREE_RECENT_RECORDS: "speaking_recent_records_free",
-  FREE_AUTOSAVE_DONE: "speaking_free_autosave_done_ids",
   IS_PRO: "speaking_is_pro",
+  TRIAL_USED: "speaking_trial_used",
 } as const;
 
 const REFRESH_LIMIT_FREE = 3;
@@ -283,27 +283,25 @@ function freeAutoSaveId(session: SessionData) {
   return `${finishedAt}__${topic}__${total}`;
 }
 
-function saveToFreeRecentRecords(session: SessionData) {
+function upsertFreeRecentRecord(session: SessionData) {
   if (typeof window === "undefined") throw new Error("ブラウザ環境でのみ保存できます。");
 
   const dedupeId = freeAutoSaveId(session);
   const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.FREE_RECENT_RECORDS));
+  const existing = current.find((x) => freeAutoSaveId(x.session) === dedupeId);
+
+  const fresh = buildSavedRecord(session);
+  const record: SavedRecord = existing
+    ? {
+        ...fresh,
+        id: existing.id,
+        savedAt: existing.savedAt,
+      }
+    : fresh;
+
   const withoutDup = current.filter((x) => freeAutoSaveId(x.session) !== dedupeId);
-  const next = [buildSavedRecord(session), ...withoutDup].slice(0, RECENT_LIMIT_FREE);
+  const next = [record, ...withoutDup].slice(0, RECENT_LIMIT_FREE);
   localStorage.setItem(LS_KEYS.FREE_RECENT_RECORDS, JSON.stringify(next));
-}
-
-function hasFreeAutoSaved(session: SessionData) {
-  const done = safeJsonParseArr<string>(localStorage.getItem(LS_KEYS.FREE_AUTOSAVE_DONE));
-  return done.includes(freeAutoSaveId(session));
-}
-
-function markFreeAutoSaved(session: SessionData) {
-  const id = freeAutoSaveId(session);
-  const done = safeJsonParseArr<string>(localStorage.getItem(LS_KEYS.FREE_AUTOSAVE_DONE));
-  if (!done.includes(id)) {
-    localStorage.setItem(LS_KEYS.FREE_AUTOSAVE_DONE, JSON.stringify([id, ...done].slice(0, 100)));
-  }
 }
 
 function sessionRefreshKey(session: SessionData | null, target: "sections" | "comment") {
@@ -639,6 +637,12 @@ export default function ResultClient() {
         }
       } catch {}
 
+      if (nextSession.accessMode === "trial") {
+        try {
+          localStorage.setItem(LS_KEYS.TRIAL_USED, "1");
+        } catch {}
+      }
+
       setSessionData(nextSession);
       setSectionsRefreshUsed(getRefreshUsed(nextSession, "sections"));
       setCommentRefreshUsed(getRefreshUsed(nextSession, "comment"));
@@ -647,14 +651,15 @@ export default function ResultClient() {
     }
   }, []);
 
+  const premiumAccess = isPro || sessionData?.accessMode === "trial";
+
   useEffect(() => {
-    if (!sessionData || fromRecords || isPro) return;
+    if (!sessionData || fromRecords) return;
+    if (isPro) return;
+
     try {
-      if (!hasFreeAutoSaved(sessionData)) {
-        saveToFreeRecentRecords(sessionData);
-        markFreeAutoSaved(sessionData);
-        setFreeAutoSaved(true);
-      }
+      upsertFreeRecentRecord(sessionData);
+      setFreeAutoSaved(true);
     } catch {}
   }, [sessionData, fromRecords, isPro]);
 
@@ -680,8 +685,8 @@ export default function ResultClient() {
   const speechText = useMemo(() => normalizeSpeechText(speechRaw), [speechRaw]);
   const qaAnalysis = sessionData?.qaAnalysis ?? [];
 
-  const sectionsRemaining = isPro ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - sectionsRefreshUsed);
-  const commentRemaining = isPro ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - commentRefreshUsed);
+  const sectionsRemaining = premiumAccess ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - sectionsRefreshUsed);
+  const commentRemaining = premiumAccess ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - commentRefreshUsed);
 
   function persistSession(next: SessionData) {
     try {
@@ -694,7 +699,7 @@ export default function ResultClient() {
     setSpeechAiError("");
     setSpeechAi(null);
 
-    if (!isPro) return;
+    if (!premiumAccess) return;
 
     const text = String(speechText ?? "").trim();
     if (!text) {
@@ -742,13 +747,13 @@ export default function ResultClient() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (cancelled || !isPro) return;
+      if (cancelled || !premiumAccess) return;
       await fetchSpeechAiOnce(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [speechText, isPro]);
+  }, [speechText, premiumAccess]);
 
   async function refreshSectionsOnly() {
     setSectionsError("");
@@ -758,7 +763,7 @@ export default function ResultClient() {
       return;
     }
 
-    if (!isPro && sectionsRefreshUsed >= REFRESH_LIMIT_FREE) {
+    if (!premiumAccess && sectionsRefreshUsed >= REFRESH_LIMIT_FREE) {
       setSectionsError(`無料版の4項目再評価は最大${REFRESH_LIMIT_FREE}回です。`);
       return;
     }
@@ -795,7 +800,7 @@ export default function ResultClient() {
 
       persistSession(next);
 
-      if (!isPro) {
+      if (!premiumAccess) {
         const nextUsed = sectionsRefreshUsed + 1;
         setRefreshUsed(sessionData, "sections", nextUsed);
         setSectionsRefreshUsed(nextUsed);
@@ -815,7 +820,7 @@ export default function ResultClient() {
       return;
     }
 
-    if (!isPro && commentRefreshUsed >= REFRESH_LIMIT_FREE) {
+    if (!premiumAccess && commentRefreshUsed >= REFRESH_LIMIT_FREE) {
       setCommentError(`無料版の面接官コメント再評価は最大${REFRESH_LIMIT_FREE}回です。`);
       return;
     }
@@ -862,7 +867,7 @@ export default function ResultClient() {
 
       persistSession(next);
 
-      if (!isPro) {
+      if (!premiumAccess) {
         const nextUsed = commentRefreshUsed + 1;
         setRefreshUsed(sessionData, "comment", nextUsed);
         setCommentRefreshUsed(nextUsed);
@@ -924,12 +929,14 @@ export default function ResultClient() {
             <div style={{ fontSize: 18, fontWeight: 900, lineHeight: 1.2 }}>面接結果</div>
             {elapsed ? <div style={{ fontSize: 12, opacity: 0.9, marginTop: 2 }}>（所要時間：{elapsed}）</div> : null}
             <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>
-              {isPro
-                ? "Pro：再評価無制限・正式保存可"
+              {premiumAccess
+                ? "初回フル体験 / Pro：詳細機能を利用できます"
                 : `無料版：4項目再評価 ${sectionsRefreshUsed}/${REFRESH_LIMIT_FREE} 回・コメント再評価 ${commentRefreshUsed}/${REFRESH_LIMIT_FREE} 回`}
             </div>
             {!isPro && freeAutoSaved ? (
-              <div style={{ fontSize: 12, opacity: 0.9, marginTop: 2 }}>無料版のため、この結果は直近5件用に自動保存されました。</div>
+              <div style={{ fontSize: 12, opacity: 0.9, marginTop: 2 }}>
+                無料版のため、この結果は直近5件用に自動保存されました。
+              </div>
             ) : null}
           </div>
 
@@ -954,9 +961,13 @@ export default function ResultClient() {
               }
               defaultOpen
             >
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 4項目再評価は点数を変えず、各評価文のみを補完・更新します。</div>
-              <div style={{ fontSize: 12, color: "#374151" }}>※ 面接官コメント再評価は最後のコメントだけを更新し、4項目評価には影響しません。</div>
-              {!isPro && (
+              <div style={{ fontSize: 12, color: "#374151" }}>
+                ※ 4項目再評価は点数を変えず、各評価文のみを補完・更新します。
+              </div>
+              <div style={{ fontSize: 12, color: "#374151" }}>
+                ※ 面接官コメント再評価は最後のコメントだけを更新し、4項目評価には影響しません。
+              </div>
+              {!premiumAccess && (
                 <div style={{ fontSize: 12, color: "#374151", marginTop: 2 }}>
                   ※ 無料版の再評価回数は各ボタンごとに最大{REFRESH_LIMIT_FREE}回です。
                 </div>
@@ -974,7 +985,7 @@ export default function ResultClient() {
                 >
                   {sectionsLoading
                     ? "4項目再評価中..."
-                    : isPro
+                    : premiumAccess
                     ? "4項目再評価"
                     : `4項目再評価（残り${sectionsRemaining}回）`}
                 </button>
@@ -988,7 +999,7 @@ export default function ResultClient() {
                 >
                   {commentLoading
                     ? "コメント再評価中..."
-                    : isPro
+                    : premiumAccess
                     ? "面接官コメント再評価"
                     : `コメント再評価（残り${commentRemaining}回）`}
                 </button>
@@ -1052,7 +1063,7 @@ export default function ResultClient() {
               icon={<span>🧠</span>}
               title="Speech分析"
               right={
-                isPro ? (
+                premiumAccess ? (
                   <button
                     type="button"
                     onClick={() => fetchSpeechAiOnce(true)}
@@ -1065,12 +1076,12 @@ export default function ResultClient() {
                 ) : undefined
               }
             >
-              {!isPro ? (
+              {!premiumAccess ? (
                 <LockCard
-                  title="Speech分析はPro限定"
+                  title="Speech分析は初回フル体験 / Proで利用可能"
                   body={
                     "無料版では総合スコア・4項目評価・面接官コメントまで利用できます。\n" +
-                    "Speechの構成分析と改善例はProで解放されます。"
+                    "Speechの構成分析と改善例は初回フル体験またはProで解放されます。"
                   }
                 />
               ) : speechAiError ? (
@@ -1112,7 +1123,9 @@ export default function ResultClient() {
 
                   <div style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}>
                     <div style={{ fontWeight: 900, marginBottom: 8, fontSize: 13 }}>Speech原文</div>
-                    <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>{speechText || "（Speechログがありません）"}</div>
+                    <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>
+                      {speechText || "（Speechログがありません）"}
+                    </div>
                   </div>
 
                   <div style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}>
@@ -1124,13 +1137,15 @@ export default function ResultClient() {
                 </>
               ) : (
                 <div style={{ border: "1px solid rgba(0,0,0,0.12)", borderRadius: 14, padding: 12, background: "#fff" }}>
-                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>{speechText || "（Speechログがありません）"}</div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap", color: "#111827" }}>
+                    {speechText || "（Speechログがありません）"}
+                  </div>
                 </div>
               )}
             </Accordion>
 
             <Accordion icon={<span>🔥</span>} title="Q&A 回答ログ（改善例付き）">
-              {!isPro ? (
+              {!premiumAccess ? (
                 <div style={{ display: "grid", gap: 12 }}>
                   {qaAnalysis.length === 0 ? (
                     <div style={{ fontSize: 13, color: "#374151" }}>（Q&A分析データがありません）</div>
@@ -1157,7 +1172,7 @@ export default function ResultClient() {
                           </div>
                         </div>
                         <div style={{ marginTop: 10 }}>
-                          <LockCard title="改善例はPro限定" body="Q&Aごとの改善例はProで表示されます。" />
+                          <LockCard title="改善例は初回フル体験 / Proで表示" body="Q&Aごとの改善例は初回フル体験またはProで表示されます。" />
                         </div>
                       </div>
                     ))
@@ -1231,7 +1246,7 @@ export default function ResultClient() {
                 >
                   {commentLoading
                     ? "再評価中..."
-                    : isPro
+                    : premiumAccess
                     ? "コメント再評価"
                     : `再評価（残り${commentRemaining}回）`}
                 </button>

@@ -66,7 +66,7 @@ export default function TermsPage() {
           <h1 style={title}>利用規約</h1>
 
           <p style={{ marginTop: 12, opacity: 0.9 }}>
-            本アプリ「英検1級 Writing 対策AI」は、Appleが提供する
+            本アプリ「スピーキング・ラボ１級：英検®AI面接練習」は、Appleが提供する
             標準エンドユーザーライセンス契約（Standard Apple End User License Agreement）
             に基づいて提供されています。
           </p>

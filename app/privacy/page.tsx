@@ -56,7 +56,7 @@ export default function PrivacyPage() {
           </h1>
 
           <p style={{ marginTop: 12, opacity: 0.9 }}>
-            本ポリシーは「英検1級 Writing 対策AI」（以下「本アプリ」）における利用者情報の取り扱いについて定めるものです。
+            本ポリシーは「スピーキング・ラボ１級：英検®AI面接練習」（以下「本アプリ」）における利用者情報の取り扱いについて定めるものです。
           </p>
 
           <h2 style={{ marginTop: 18, fontSize: 16, fontWeight: 900 }}>
