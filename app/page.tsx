@@ -201,6 +201,12 @@ export default function HomePage() {
     }
   }
 
+  function onOpenTraining() {
+    
+      setBlockMsg(null);
+    router.push("/training");
+  }
+
   function startPurchase(productId: string) {
     if (purchaseBusy) return;
 
@@ -292,6 +298,13 @@ export default function HomePage() {
     cursor: "pointer",
   };
 
+  const lockedSubBtn: React.CSSProperties = {
+    ...subBtn,
+    opacity: 0.6,
+    cursor: "not-allowed",
+    background: "rgba(255,255,255,0.72)",
+  };
+
   const planCard = (featured?: boolean): React.CSSProperties => ({
     position: "relative",
     borderRadius: 22,
@@ -333,7 +346,7 @@ export default function HomePage() {
               letterSpacing: 0.4,
             }}
           >
-            英検1級 二次面接AI
+            スピーキング・ラボ１級
           </h1>
 
           <div
@@ -384,6 +397,14 @@ export default function HomePage() {
               <Link href="/records" style={subBtn}>
                 記録
               </Link>
+
+              <button
+                type="button"
+                onClick={onOpenTraining}
+                style={subBtn}
+              >
+                トレーニング
+              </button>
 
               <button
                 type="button"
@@ -443,6 +464,7 @@ export default function HomePage() {
                   "🔁 詳細な再評価機能",
                   "💾 正式な記録保存",
                   "📈 成長分析ダッシュボード",
+                  "🏋️ Speech / Q&A / Free Talk トレーニング",
                 ].map((item) => (
                   <div
                     key={item}
@@ -521,7 +543,7 @@ export default function HomePage() {
 
             <div style={planCard(false)}>
               <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>松｜月額プラン</div>
-              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>月額3,000円</div>
+              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>月額5,000円</div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
                 まずは短期間で試したい方向け。
               </div>
@@ -554,9 +576,9 @@ export default function HomePage() {
               </div>
 
               <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>竹｜3ヶ月プラン</div>
-              <div style={{ marginTop: 4, fontSize: 26, fontWeight: 900, color: "#0f172a" }}>3ヶ月8,000円</div>
+              <div style={{ marginTop: 4, fontSize: 26, fontWeight: 900, color: "#0f172a" }}>3ヶ月12,000円</div>
               <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#b45309" }}>
-                月あたり約2,667円
+                月あたり4,000円
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
                 本番まで継続して練習したい人に最適。価格と継続期間のバランスが最も良いプラン。
@@ -573,9 +595,9 @@ export default function HomePage() {
 
             <div style={planCard(false)}>
               <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>梅｜年額プラン</div>
-              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>年額27,000円</div>
+              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>年額30,000円</div>
               <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#475569" }}>
-                月あたり2,250円
+                月あたり2,500円
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
                 長期で英語力全体を鍛えたい方向け。月額換算では最もお得です。
@@ -616,6 +638,7 @@ export default function HomePage() {
                   "🔁 再評価でコメントを補完できる",
                   "💾 記録保存で学習履歴を残せる",
                   "📈 ダッシュボードで成長を確認できる",
+                  "🏋️ トレーニングで目的別に練習できる",
                 ].map((item) => (
                   <div
                     key={item}

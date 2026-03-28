@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
+export const runtime = "nodejs";
+
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -15,13 +17,13 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => null);
 
     const topic = String(body?.topic ?? "").trim();
-    const speech = String(body?.speech ?? "").trim();
+    const speech = String(body?.speech ?? "").trim(); // 任意
     const question = String(body?.question ?? "").trim();
     const answer = String(body?.answer ?? "").trim();
 
-    if (!topic || !speech || !question || !answer) {
+    if (!topic || !question || !answer) {
       return NextResponse.json(
-        { ok: false, error: "topic/speech/question/answer are required" },
+        { ok: false, error: "topic/question/answer are required" },
         { status: 400 }
       );
     }
@@ -35,28 +37,38 @@ export async function POST(req: Request) {
       "- Must directly answer the question.\n" +
       "- 3 to 5 sentences.\n" +
       "- Clear stance first, then reason, then one concrete example, then short wrap-up.\n" +
-      "- Use at least one connector (However/Therefore/For example).\n" +
+      "- Use at least one connector such as However, Therefore, or For example.\n" +
       "- Keep it natural and not too fancy.\n" +
       "- Output ONLY the improved answer as plain text. No markdown, no bullets, no labels.";
 
-    const user =
+    const userWithSpeech =
       `TOPIC: ${topic}\n\n` +
       `CANDIDATE SPEECH (context):\n${speech}\n\n` +
       `QUESTION:\n${question}\n\n` +
       `CANDIDATE ANSWER:\n${answer}\n\n` +
       "Return ONE improved answer only.";
 
+    const userWithoutSpeech =
+      `TOPIC: ${topic}\n\n` +
+      `QUESTION:\n${question}\n\n` +
+      `CANDIDATE ANSWER:\n${answer}\n\n` +
+      "There is no earlier speech context for this training.\n" +
+      "Return ONE improved answer only.";
+
     const res = await client.responses.create({
       model: "gpt-4.1-mini",
       input: [
         { role: "system", content: system },
-        { role: "user", content: user },
+        { role: "user", content: speech ? userWithSpeech : userWithoutSpeech },
       ],
     });
 
     const text = String(res.output_text ?? "").trim();
     if (!text) {
-      return NextResponse.json({ ok: false, error: "Empty output from model" }, { status: 502 });
+      return NextResponse.json(
+        { ok: false, error: "Empty output from model" },
+        { status: 502 }
+      );
     }
 
     return NextResponse.json({ ok: true, example: text });

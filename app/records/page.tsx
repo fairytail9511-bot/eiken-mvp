@@ -117,8 +117,12 @@ export default function RecordsPage() {
     whiteSpace: "pre-wrap",
   };
 
+  const analyticsHint = isPro
+    ? "強み・弱点アナリティクスを利用できます"
+    : "強み・弱点アナリティクスは有料プランで解放されます";
+
   const dashboardHint = isPro
-    ? "有料版では成長分析ダッシュボードを利用できます"
+    ? "成長分析ダッシュボードを利用できます"
     : "成長分析ダッシュボードは有料プランで解放されます";
 
   return (
@@ -132,8 +136,8 @@ export default function RecordsPage() {
 
         <div style={subStyle}>
           {isPro
-            ? "最近の記録と成長分析ダッシュボードが利用できます。"
-            : "最近の記録は利用できます。\n成長分析ダッシュボードは有料プランで解放されます。"}
+            ? "最近の記録・強み/弱点アナリティクス・成長分析ダッシュボードが利用できます。"
+            : "最近の記録は利用できます。\n強み/弱点アナリティクス・成長分析ダッシュボードは有料プランで解放されます。"}
         </div>
 
         <Link
@@ -144,6 +148,25 @@ export default function RecordsPage() {
         >
           📝 最近の記録
         </Link>
+
+        {isPro ? (
+          <Link
+            href="/records/analytics"
+            style={buttonStyle}
+            onMouseEnter={(e) => Object.assign(e.currentTarget.style, buttonHover)}
+            onMouseLeave={(e) => Object.assign(e.currentTarget.style, buttonStyle)}
+          >
+            💎 強み・弱点アナリティクス
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={() => alert("強み・弱点アナリティクスは有料プランで解放されます。")}
+            style={lockedButtonStyle}
+          >
+            💎 強み・弱点アナリティクス
+          </button>
+        )}
 
         {isPro ? (
           <Link
@@ -175,6 +198,7 @@ export default function RecordsPage() {
 
         <div style={footerNote}>
           ※ 最近の記録：無料は直近5件の自動保存／有料は手動保存した記録も表示
+          {"\n"}※ {analyticsHint}
           {"\n"}※ {dashboardHint}
         </div>
       </div>
