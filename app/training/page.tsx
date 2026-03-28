@@ -155,7 +155,7 @@ export default function TrainingPage() {
 
         {isPro ? (
           <Link href="/training/qa" style={cardLinkStyle}>
-            <div style={cardTitleStyle}>💬 トピックQ&amp;Aトレーニング</div>
+            <div style={cardTitleStyle}>💬 Q&amp;Aトレーニング</div>
             <div style={cardDescStyle}>
               あらかじめ決まったトピックに対して4問のQ&amp;Aを行います。
               {"\n"}結果ではQ&amp;Aの採点・評価理由・原文・改善例を確認できます。
@@ -164,10 +164,10 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert("トピックQ&Aトレーニングは有料プランで解放されます。")}
+            onClick={() => alert("Q&Aトレーニングは有料プランで解放されます。")}
             style={lockedCardStyle}
           >
-            <div style={cardTitleStyle}>💬 トピックQ&amp;Aトレーニング</div>
+            <div style={cardTitleStyle}>💬 Q&amp;Aトレーニング</div>
             <div style={cardDescStyle}>
               あらかじめ決まったトピックに対して4問のQ&amp;Aを行います。
               {"\n"}結果ではQ&amp;Aの採点・評価理由・原文・改善例を確認できます。
