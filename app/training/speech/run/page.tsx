@@ -1,7 +1,7 @@
 // app/training/speech/run/page.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
@@ -166,7 +166,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   return null;
 }
 
-export default function TrainingSpeechRunPage() {
+  function TrainingSpeechRunPageInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -952,5 +952,30 @@ const score = buildSpeechScore(s, blocks, feedback);
         </div>
       </div>
     </main>
+  );
+}
+
+export default function TrainingSpeechRunPage() {
+  return (
+    <Suspense
+      fallback={
+        <main
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background:
+              "radial-gradient(1200px 700px at 50% 10%, rgba(255,255,255,0.12), rgba(0,0,0,0) 60%), linear-gradient(180deg, #0b1220 0%, #070a12 55%, #06070d 100%)",
+            color: "#fff",
+            padding: 24,
+          }}
+        >
+          読み込み中...
+        </main>
+      }
+    >
+      <TrainingSpeechRunPageInner />
+    </Suspense>
   );
 }
