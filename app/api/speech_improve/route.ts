@@ -88,7 +88,7 @@ export async function POST(req: Request) {
     const user = `SPEECH:\n${speech}\n\nReturn ONLY the JSON object.`;
 
     const res = await client.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      model: process.env.OPENAI_MODEL || "gpt-5.4",
       input: [
         { role: "system", content: system },
         { role: "user", content: user },

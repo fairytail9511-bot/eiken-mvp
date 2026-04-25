@@ -88,7 +88,7 @@ export async function POST(req: Request) {
       "Return ONE examiner line (acknowledgement + ONE follow-up question).";
 
     const res = await client.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
       input: [
         { role: "system", content: system },
         { role: "user", content: user },

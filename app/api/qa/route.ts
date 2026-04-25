@@ -4,7 +4,7 @@ import OpenAI from "openai";
 
 export const runtime = "nodejs";
 
-const MODEL_QA = "gpt-4-turbo-2024-04-09";
+const MODEL_QA = "gpt-5.4-mini";
 const apiKey = process.env.OPENAI_API_KEY;
 
 function normalizeDifficulty(input: string) {

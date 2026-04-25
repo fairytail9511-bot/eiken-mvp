@@ -1,7 +1,7 @@
 // app/api/smalltalk/route.ts
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
-const MODEL_SMALLTALK = "gpt-4-turbo-2024-04-09";
+const MODEL_SMALLTALK = "gpt-5.4-mini";
 
 export const runtime = "nodejs";
 

@@ -87,7 +87,7 @@ async function callOpenAI(system: string, user: string) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "gpt-4.1-mini",
+      model: "gpt-5.4-mini",
       temperature: 0.9,
       max_tokens: 160,
       messages: [

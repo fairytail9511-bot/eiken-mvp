@@ -56,7 +56,7 @@ export async function POST(req: Request) {
       "Return ONE improved answer only.";
 
     const res = await client.responses.create({
-      model: "gpt-4.1-mini",
+      model: "gpt-5.4",
       input: [
         { role: "system", content: system },
         { role: "user", content: speech ? userWithSpeech : userWithoutSpeech },

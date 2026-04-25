@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import type { TopicResponse } from "@/app/types";
-const MODEL_TOPIC = "gpt-4-turbo-2024-04-09";
+const MODEL_TOPIC = "gpt-5.4-mini";
 
 export const runtime = "nodejs";
 

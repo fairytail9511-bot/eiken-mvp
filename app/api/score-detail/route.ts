@@ -4,7 +4,7 @@ import OpenAI from "openai";
 
 export const runtime = "nodejs";
 
-const MODEL_SCORE = "gpt-4-turbo-2024-04-09";
+const MODEL_SCORE = "gpt-5.4";
 const apiKey = process.env.OPENAI_API_KEY;
 
 type ThreeBlock = {
