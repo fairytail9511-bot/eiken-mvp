@@ -547,7 +547,7 @@ export default function SmalltalkPage() {
 
   // ===== UI styles =====
   const gold = "rgba(234, 179, 8, 0.55)";
-  const goldStrong = "rgba(234, 179, 8, 0.75)";
+  const goldStrong = "rgba(234, 179, 8, 0.8)";
   const panelBg = "rgba(255,255,255,0.06)";
   const panelBg2 = "rgba(255,255,255,0.08)";
   const panelBorder = "rgba(255,255,255,0.14)";
@@ -556,7 +556,7 @@ export default function SmalltalkPage() {
   const rootStyle: React.CSSProperties = {
     minHeight: "100vh",
     background:
-      "radial-gradient(1200px 800px at 50% 0%, rgba(30,58,138,0.30) 0%, rgba(2,6,23,1) 55%, rgba(0,0,0,1) 100%)",
+      "radial-gradient(120% 120% at 50% 0%, #2d3748 0%, #111827 45%, #0a0f1c 100%)",
     color: "#fff",
   };
 
@@ -583,7 +583,7 @@ export default function SmalltalkPage() {
 
   // ✅ 会話ブロックだけスクロール（ページスクロールも残す）
   const chatWrapStyle: React.CSSProperties = {
-    borderRadius: 16,
+    borderRadius: 18,
     border: `1px solid ${panelBorder}`,
     background: panelBg,
     overflow: "hidden",
@@ -603,7 +603,7 @@ export default function SmalltalkPage() {
   };
 
   const bottomWrapStyle: React.CSSProperties = {
-    borderRadius: 16,
+    borderRadius: 18,
     border: `1px solid ${panelBorder}`,
     background: panelBg2,
     padding: 12,
@@ -614,17 +614,17 @@ export default function SmalltalkPage() {
   };
 
   const btnBase: React.CSSProperties = {
-    borderRadius: 14,
+    borderRadius: 999,
     padding: "12px 14px",
     fontWeight: 800,
-    color: "#fff",
-    border: `1px solid ${gold}`,
-    background: "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.12)",
+    color: "rgba(250, 249, 247, 0.9)",
+    border: "1px solid rgba(234, 179, 8, 0.8)",
+    background: "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
   };
 
   const btnSub: React.CSSProperties = {
-    borderRadius: 14,
+    borderRadius: 999,
     padding: "12px 14px",
     fontWeight: 800,
     color: "#fff",
@@ -697,7 +697,7 @@ export default function SmalltalkPage() {
                         title="Read again"
                         style={{
                           flex: "none",
-                          borderRadius: 12,
+                          borderRadius: 14,
                           padding: "8px 10px",
                           border: `1px solid ${goldStrong}`,
                           background: "rgba(0,0,0,0.25)",
@@ -723,7 +723,7 @@ export default function SmalltalkPage() {
                 border: "1px solid rgba(220,38,38,0.55)",
                 background: "rgba(220,38,38,0.12)",
                 color: "rgba(255,255,255,0.92)",
-                borderRadius: 12,
+                borderRadius: 14,
                 padding: 10,
                 fontSize: 13,
                 whiteSpace: "pre-wrap",
@@ -858,17 +858,10 @@ export default function SmalltalkPage() {
               type="button"
               onClick={onGoTop}
               style={{
-                ...btnSub,
+                ...btnBase,
                 width: "100%",
-              borderRadius: 14,
-              border: "1px solid rgba(234,179,8,0.55)",
-              padding: "12px 14px",
-              fontWeight: 900,
-              color: "#fff",
-              background:
-                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
-              cursor: "pointer",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+                fontWeight: 900,
+                cursor: "pointer",
               }}
             >
               トップ画面へ戻る

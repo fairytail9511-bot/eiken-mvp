@@ -429,7 +429,9 @@ export default function TopicPage() {
   const canSubmit = phase === "ask" && !!selectedTopicText && !isTranscribing && !isStarting;
 
   const stopBtnStyle: React.CSSProperties = {
-    backgroundColor: stopEnabled ? "#dc2626" : "#fecaca",
+    background: stopEnabled
+      ? "linear-gradient(180deg, rgba(220,38,38,0.95) 0%, rgba(127,29,29,0.95) 100%)"
+      : "rgba(254,202,202,0.35)",
     opacity: stopEnabled ? 1 : 0.75,
     cursor: stopEnabled ? "pointer" : "not-allowed",
   };
@@ -440,7 +442,7 @@ export default function TopicPage() {
     justifyContent: "center",
     padding: 16,
     background:
-      "radial-gradient(1200px 600px at 20% 10%, rgba(234,179,8,0.10), transparent 55%), radial-gradient(900px 500px at 80% 10%, rgba(59,130,246,0.12), transparent 60%), linear-gradient(180deg, #070b12 0%, #0b1220 40%, #070b12 100%)",
+      "radial-gradient(120% 120% at 50% 0%, #2d3748 0%, #111827 45%, #0a0f1c 100%)",
   };
 
   const cardWrap: React.CSSProperties = {
@@ -451,11 +453,11 @@ export default function TopicPage() {
     gap: 12,
   };
 
-  const goldBorder = "1px solid rgba(234,179,8,0.55)";
+  const goldBorder = "1px solid rgba(234,179,8,0.25)";
   const cardBase: React.CSSProperties = {
     border: goldBorder,
-    borderRadius: 14,
-    background: "rgba(255,255,255,0.10)",
+    borderRadius: 18,
+    background: "rgba(255,255,255,0.06)",
     boxShadow: "0 12px 30px rgba(0,0,0,0.45)",
     backdropFilter: "blur(10px)",
   };
@@ -479,7 +481,7 @@ export default function TopicPage() {
     textAlign: "left",
     borderRadius: 14,
     padding: 14,
-    border: goldBorder,
+    border: "1px solid rgba(234,179,8,0.45)",
     background: "rgba(255,255,255,0.08)",
     color: "rgba(255,255,255,0.88)",
     boxShadow: "0 10px 26px rgba(0,0,0,0.35)",
@@ -583,8 +585,8 @@ export default function TopicPage() {
                     onClick={() => speak(examinerAsk)}
                     style={{
                       marginLeft: "auto",
-                      borderRadius: 10,
-                      border: goldBorder,
+                      borderRadius: 14,
+                      border: "1px solid rgba(234,179,8,0.45)",
                       background: "rgba(255,255,255,0.10)",
                       color: "rgba(255,255,255,0.92)",
                       padding: "6px 10px",
@@ -645,7 +647,7 @@ export default function TopicPage() {
                     style={{
                       ...listButtonBase,
                       background: selected ? selectedButtonBg : listButtonBase.background,
-                      border: selected ? "1px solid rgba(234, 179, 8, 0.95)" : goldBorder,
+                      border: selected ? "1px solid rgba(234, 179, 8, 0.95)" : "1px solid rgba(234,179,8,0.45)",
                       boxShadow: selected
                         ? "0 14px 36px rgba(234,179,8,0.12), 0 10px 26px rgba(0,0,0,0.40)"
                         : listButtonBase.boxShadow,
@@ -712,17 +714,17 @@ export default function TopicPage() {
                     disabled={isTranscribing || isStarting || isRecording}
                     style={{
                       width: 120,
-                      borderRadius: 12,
-                      border: goldBorder,
+                      borderRadius: 999,
+                      border: "1px solid rgba(234,179,8,0.8)",
                       background:
                         isTranscribing || isStarting || isRecording
-                          ? "rgba(1, 21, 48, 0.65)"
-                          : "linear-gradient(180deg, rgba(5, 68, 216, 0.95) 0%, rgba(3, 10, 39, 0.95) 100%)",
-                      color: "rgba(255,255,255,0.92)",
+                          ? "rgba(76, 93, 121, 0.55)"
+                          : "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
+                      color: "rgba(250, 249, 247, 0.9)",
                       padding: "10px 12px",
                       fontWeight: 900,
                       cursor: isTranscribing || isStarting || isRecording ? "not-allowed" : "pointer",
-                      boxShadow: "0 12px 26px rgba(0,0,0,0.45)",
+                      boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
                     }}
                   >
                     🎤 Mic
@@ -734,12 +736,12 @@ export default function TopicPage() {
                     disabled={!stopEnabled}
                     style={{
                       width: 120,
-                      borderRadius: 12,
-                      border: "1px solid rgba(248,113,113,0.55)",
-                      color: "rgba(255,255,255,0.92)",
+                      borderRadius: 999,
+                      border: "1px solid rgba(220,38,38,0.75)",
+                      color: "rgba(250, 249, 247, 0.9)",
                       padding: "10px 12px",
                       fontWeight: 900,
-                      boxShadow: "0 12px 26px rgba(0,0,0,0.45)",
+                      boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
                       ...stopBtnStyle,
                     }}
                   >
@@ -768,7 +770,7 @@ export default function TopicPage() {
                   style={{
                     width: "100%",
                     borderRadius: 14,
-                    border: goldBorder,
+                    border: "1px solid rgba(234,179,8,0.45)",
                     background: "rgba(255,255,255,0.08)",
                     color: "rgba(255,255,255,0.92)",
                     padding: 12,
@@ -784,16 +786,16 @@ export default function TopicPage() {
                   disabled={!canSubmit}
                   style={{
                     width: "100%",
-                    borderRadius: 14,
-                    border: goldBorder,
-                    padding: "12px 14px",
+                    borderRadius: 999,
+                    border: "1px solid rgba(234,179,8,0.8)",
+                    padding: "14px 16px",
                     fontWeight: 900,
-                    color: "rgba(255,255,255,0.92)",
+                    color: "rgba(250, 249, 247, 0.9)",
                     background: canSubmit
-                      ? "linear-gradient(180deg, rgba(7, 19, 180, 0.95) 0%, rgba(234,179,8,0.14) 100%)"
+                      ? "linear-gradient(180deg, #2d468b 0%, #020617 100%)"
                       : "rgba(148,163,184,0.35)",
                     cursor: canSubmit ? "pointer" : "not-allowed",
-                    boxShadow: "0 14px 36px rgba(0,0,0,0.45)",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
                   }}
                 >
                   返信 → Speechへ
@@ -809,10 +811,10 @@ export default function TopicPage() {
         <div
           style={{
             marginTop: 12,
-            border: "1px solid rgba(255,255,255,0.14)",
-            borderRadius: 14,
+            border: "1px solid rgba(234,179,8,0.25)",
+            borderRadius: 18,
             padding: 12,
-            background: "rgba(0,0,0,0.35)",
+            background: "rgba(255,255,255,0.06)",
             display: "flex",
             flexDirection: "column",
             gap: 10,
@@ -835,15 +837,14 @@ export default function TopicPage() {
             onClick={onGoTop}
             style={{
               width: "100%",
-              borderRadius: 14,
-              border: "1px solid rgba(234,179,8,0.55)",
-              padding: "12px 14px",
+              borderRadius: 999,
+              border: "1px solid rgba(234,179,8,0.8)",
+              padding: "14px 16px",
               fontWeight: 900,
-              color: "#fff",
-              background:
-                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
+              color: "rgba(250, 249, 247, 0.9)",
+              background: "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
               cursor: "pointer",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
             }}
           >
             トップ画面へ戻る

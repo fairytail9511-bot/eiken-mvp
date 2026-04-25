@@ -342,16 +342,16 @@ function resultSessionMarkerKey(session: SessionData | null) {
 const pageBg: React.CSSProperties = {
   minHeight: "100vh",
   background:
-    "radial-gradient(1200px 800px at 20% 10%, rgba(18, 28, 55, 0.95) 0%, rgba(6, 9, 20, 0.98) 55%, rgba(0, 0, 0, 1) 100%)",
+    "radial-gradient(120% 120% at 50% 0%, #3b4252 0%, #1f2937 45%, #0f172a 100%)",
 };
 
-const goldBorder = "rgba(234, 179, 8, 0.55)";
+const goldBorder = "rgba(234, 179, 8, 0.45)";
 const goldBorderStrong = "rgba(234, 179, 8, 0.85)";
 
 const cardOuter: React.CSSProperties = {
   border: `1px solid ${goldBorder}`,
-  borderRadius: 16,
-  boxShadow: "0 12px 30px rgba(0,0,0,0.55)",
+  borderRadius: 14,
+  boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
   overflow: "hidden",
   background: "rgba(255,255,255,0.96)",
 };
@@ -363,8 +363,8 @@ const cardInnerWhite: React.CSSProperties = {
 
 const pillBtn: React.CSSProperties = {
   border: `1px solid rgba(0,0,0,0.18)`,
-  borderRadius: 10,
-  padding: "6px 10px",
+  borderRadius: 999,
+  padding: "6px 12px",
   fontSize: 12,
   background: "#fff",
   color: "#0f172a",
@@ -376,7 +376,7 @@ const pillBtn: React.CSSProperties = {
 const iconBox: React.CSSProperties = {
   width: 34,
   height: 34,
-  borderRadius: 10,
+  borderRadius: 14,
   border: `1px solid ${goldBorderStrong}`,
   display: "flex",
   alignItems: "center",
@@ -499,7 +499,7 @@ function ThreeBlockCard({
           style={{
             marginTop: 10,
             border: "1px solid rgba(0,0,0,0.12)",
-            borderRadius: 12,
+            borderRadius: 14,
             padding: 10,
             fontSize: 13,
             whiteSpace: "pre-wrap",
@@ -516,7 +516,7 @@ function ThreeBlockCard({
 
   const box: React.CSSProperties = {
     border: "1px solid rgba(0,0,0,0.12)",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 10,
     background: "#fff",
   };
@@ -579,7 +579,7 @@ function LockCard({
           style={{
             marginTop: 10,
             ...pillBtn,
-            borderRadius: 12,
+            padding: "8px 14px",
           }}
         >
           有料プランを見る
@@ -1137,7 +1137,7 @@ export default function ResultClient() {
                 <div
                   style={{
                     border: "1px solid rgba(0,0,0,0.12)",
-                    borderRadius: 12,
+                    borderRadius: 14,
                     padding: 10,
                     background: "#fff",
                     fontSize: 13,
@@ -1214,7 +1214,7 @@ export default function ResultClient() {
                               marginTop: 6,
                               padding: 10,
                               border: "1px solid rgba(0,0,0,0.12)",
-                              borderRadius: 12,
+                              borderRadius: 14,
                               background: "#f8fafc",
                               whiteSpace: "pre-wrap",
                             }}
@@ -1259,7 +1259,7 @@ export default function ResultClient() {
                               marginTop: 6,
                               padding: 10,
                               border: "1px solid rgba(0,0,0,0.12)",
-                              borderRadius: 12,
+                              borderRadius: 14,
                               background: "#f8fafc",
                               whiteSpace: "pre-wrap",
                             }}
@@ -1275,7 +1275,7 @@ export default function ResultClient() {
                               marginTop: 6,
                               padding: 10,
                               border: "1px solid rgba(0,0,0,0.12)",
-                              borderRadius: 12,
+                              borderRadius: 14,
                               background: "#fff",
                               whiteSpace: "pre-wrap",
                             }}
@@ -1324,10 +1324,10 @@ export default function ResultClient() {
               href="/"
               style={{
                 ...pillBtn,
-                padding: "10px 14px",
-                borderRadius: 14,
+                padding: "12px 18px",
+                fontSize: 14,
                 borderColor: goldBorderStrong,
-                boxShadow: "0 10px 24px rgba(0,0,0,0.45)",
+                boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
               }}
             >
               トップ画面に戻る
@@ -1339,10 +1339,10 @@ export default function ResultClient() {
                 onClick={() => router.back()}
                 style={{
                   ...pillBtn,
-                  padding: "10px 14px",
-                  borderRadius: 14,
+                  padding: "12px 18px",
+                  fontSize: 14,
                   borderColor: goldBorderStrong,
-                  boxShadow: "0 10px 24px rgba(0,0,0,0.45)",
+                  boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
                 }}
               >
                 戻る
@@ -1356,10 +1356,10 @@ export default function ResultClient() {
                 disabled={saveLoading || !sessionData}
                 style={{
                   ...pillBtn,
-                  padding: "10px 14px",
-                  borderRadius: 14,
+                  padding: "12px 18px",
+                  fontSize: 14,
                   borderColor: goldBorderStrong,
-                  boxShadow: "0 10px 24px rgba(0,0,0,0.45)",
+                  boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
                   opacity: saveLoading || !sessionData ? 0.6 : 1,
                 }}
                 title="この結果を最近の記録に保存"

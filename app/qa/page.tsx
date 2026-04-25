@@ -17,9 +17,55 @@ import { LS_KEYS } from "@/app/types";
 
 import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
 
+const LS_KEY_IS_PRO = "speaking_is_pro";
+const LS_KEY_TRIAL_USED = "speaking_trial_used";
+const LS_KEY_FREE_MONTH = "speaking_free_month";
+const LS_KEY_FREE_COUNT = "speaking_free_count";
+const LS_KEY_ACCESS_TOKEN = "speaking_access_token";
+
 /* =====================
    Utility (analysis)
 ===================== */
+function monthKeyNow() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+function getIsPro() {
+  try {
+    return localStorage.getItem(LS_KEY_IS_PRO) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function getAccessToken() {
+  try {
+    return localStorage.getItem(LS_KEY_ACCESS_TOKEN) || "";
+  } catch {
+    return "";
+  }
+}
+
+function persistScoreAccess(data: ScoreAccessResponse) {
+  try {
+    if (typeof data.accessToken === "string" && data.accessToken) {
+      localStorage.setItem(LS_KEY_ACCESS_TOKEN, data.accessToken);
+    }
+
+    if (data.accessMode === "trial") {
+      localStorage.setItem(LS_KEY_TRIAL_USED, "1");
+    }
+
+    if (typeof data.usedThisMonth === "number" && Number.isFinite(data.usedThisMonth)) {
+      localStorage.setItem(LS_KEY_FREE_MONTH, monthKeyNow());
+      localStorage.setItem(LS_KEY_FREE_COUNT, String(Math.max(0, data.usedThisMonth)));
+    }
+  } catch {}
+}
+
 function countWords(text: string) {
   return String(text ?? "")
     .trim()
@@ -71,6 +117,16 @@ type QAAnalysisItem = {
   vagueFlags: string[];
   answeredAt: string;
   improvementExample?: string;
+};
+
+type ScoreAccessResponse = Partial<ScoreResponse> & {
+  error?: string;
+  message?: string;
+  paywall?: boolean;
+  accessMode?: "pro" | "trial" | "free" | string;
+  accessToken?: string;
+  usedThisMonth?: number;
+  limit?: number;
 };
 
 export default function QAPage() {
@@ -537,11 +593,18 @@ export default function QAPage() {
       const res = await fetch("/api/score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: pending.topic, transcript, difficulty }),
+        body: JSON.stringify({
+          topic: pending.topic,
+          transcript,
+          difficulty,
+          isPro: getIsPro(),
+          accessToken: getAccessToken(),
+        }),
       });
 
-      const data = (await res.json()) as Partial<ScoreResponse> & { error?: string };
-      if (!res.ok) throw new Error(data?.error ?? "Failed to score");
+      const data = (await res.json()) as ScoreAccessResponse;
+      if (!res.ok) throw new Error(data?.message ?? data?.error ?? "Failed to score");
+      persistScoreAccess(data);
 
       const ok =
         typeof data?.total === "number" &&
@@ -573,6 +636,7 @@ export default function QAPage() {
           String((data as any).next_steps[2]),
         ],
         comment: data.comment as string,
+        three_blocks: data.three_blocks as ScoreResult["three_blocks"],
       };
 
       const smalltalk = (() => {
@@ -609,6 +673,8 @@ export default function QAPage() {
           topic: pending.topic,
           finishedAt: new Date().toISOString(),
           difficulty,
+          accessMode: data.accessMode ?? (getIsPro() ? "pro" : "free"),
+          usedThisMonth: data.usedThisMonth,
           scoreResult,
           logs: { smalltalk, speech: pending.speech, qa: msgs },
           transcript,
@@ -663,7 +729,7 @@ export default function QAPage() {
     display: "flex",
     justifyContent: "center",
     background:
-      "radial-gradient(1200px 800px at 50% 0%, rgba(0, 30, 113, 0.76) 0%, rgba(0,0,0,0.92) 55%, rgba(0,0,0,0.98) 100%)",
+      "radial-gradient(120% 120% at 50% 0%, #2d3748 0%, #111827 45%, #0a0f1c 100%)",
   };
 
   const phoneStyle: React.CSSProperties = {
@@ -677,8 +743,8 @@ export default function QAPage() {
 
   const cardGold: React.CSSProperties = {
     borderRadius: 18,
-    border: "1px solid rgba(253, 190, 0, 0.7)",
-    boxShadow: "0 18px 40px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.06)",
+    border: "1px solid rgba(234, 179, 8, 0.25)",
+    boxShadow: "0 18px 40px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.06)",
     background: "rgba(255,255,255,0.06)",
     backdropFilter: "blur(10px)",
   };
@@ -694,7 +760,7 @@ export default function QAPage() {
     aspectRatio: "16 / 10",
     borderRadius: 14,
     overflow: "hidden",
-    background: "rgba(143, 0, 0, 0.35)",
+    background: "rgba(0,0,0,0.35)",
   };
 
   const convoStyle: React.CSSProperties = {
@@ -746,26 +812,27 @@ export default function QAPage() {
 
   const btnBase: React.CSSProperties = {
     flex: 1,
-    borderRadius: 14,
+    borderRadius: 999,
     padding: "12px 14px",
     fontWeight: 800,
-    border: "1px solid rgba(234,179,8,0.35)",
-    boxShadow: "0 10px 24px rgba(0,0,0,0.45)",
+    border: "1px solid rgba(234,179,8,0.8)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
   };
 
   const micBtn: React.CSSProperties = {
     ...btnBase,
-    color: "#fff",
+    color: "rgba(250, 249, 247, 0.9)",
     background: micDisabled
       ? "linear-gradient(180deg, rgba(148,163,184,0.55), rgba(148,163,184,0.25))"
-      : "linear-gradient(180deg, rgba(30,58,138,0.95), rgba(15,23,42,0.9))",
+      : "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
     cursor: micDisabled ? "not-allowed" : "pointer",
     opacity: micDisabled ? 0.6 : 1,
   };
 
   const stopBtn: React.CSSProperties = {
     ...btnBase,
-    color: "#fff",
+    color: "rgba(250, 249, 247, 0.9)",
+    border: "1px solid rgba(220,38,38,0.75)",
     background: stopEnabled
       ? "linear-gradient(180deg, rgba(220,38,38,0.95), rgba(127,29,29,0.9))"
       : "linear-gradient(180deg, rgba(248,113,113,0.35), rgba(127,29,29,0.25))",
@@ -775,23 +842,25 @@ export default function QAPage() {
 
   const sendBtn: React.CSSProperties = {
     width: "100%",
-    borderRadius: 18,
-    padding: "14px 14px",
+    borderRadius: 999,
+    padding: "14px 16px",
     fontWeight: 900,
-    border: "1px solid rgba(234,179,8,0.45)",
+    border: "1px solid rgba(234,179,8,0.8)",
     background: canSend
-      ? "linear-gradient(180deg, rgba(30, 58, 138, 0.95), rgba(15,23,42,0.9))"
-      : "linear-gradient(180deg, rgba(229, 214, 1, 0.99), rgba(94, 98, 1, 0.25))",
-    color: "#ffffffff",
+      ? "linear-gradient(180deg, #2d468b 0%, #020617 100%)"
+      : "rgba(148,163,184,0.35)",
+    color: "rgba(250, 249, 247, 0.9)",
     cursor: canSend ? "pointer" : "not-allowed",
-    boxShadow: canSend ? "0 18px 40px rgba(0,0,0,0.55)" : "0 8px 18px rgba(0,0,0,0.35)",
+    boxShadow: canSend
+      ? "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)"
+      : "0 8px 18px rgba(0,0,0,0.35)",
   };
 
   const smallBtn: React.CSSProperties = {
     width: 44,
     height: 44,
     borderRadius: 14,
-    border: "1px solid rgba(234,179,8,0.35)",
+    border: "1px solid rgba(234,179,8,0.45)",
     background: "rgba(0,0,0,0.25)",
     color: "#fff",
     cursor: "pointer",
@@ -799,25 +868,12 @@ export default function QAPage() {
   };
 
   const escapeCardStyle: React.CSSProperties = {
-    borderTop: "1px solid rgba(255,255,255,0.14)",
+    borderTop: "1px solid rgba(234,179,8,0.25)",
     paddingTop: 10,
     fontSize: 12,
     lineHeight: 1.6,
     color: "rgba(255,255,255,0.78)",
     whiteSpace: "pre-wrap",
-  };
-
-  const goTopBtnStyle: React.CSSProperties = {
-    marginTop: 8,
-    width: "100%",
-    borderRadius: 14,
-    padding: "12px 14px",
-    fontWeight: 900,
-    border: "1px solid rgba(234,179,8,0.35)",
-    background: "rgba(255,255,255,0.06)",
-    color: "#fff",
-    cursor: "pointer",
-    boxShadow: "0 10px 22px rgba(0,0,0,0.40)",
   };
 
   function onGoTop() {
@@ -924,7 +980,7 @@ export default function QAPage() {
                     style={{
                       width: "100%",
                       borderRadius: 14,
-                      border: "1px solid rgba(234,179,8,0.28)",
+                      border: "1px solid rgba(234,179,8,0.45)",
                       background: "rgba(0,0,0,0.28)",
                       color: "rgba(255,255,255,0.92)",
                       padding: 12,
@@ -969,16 +1025,11 @@ export default function QAPage() {
           <button type="button" 
           onClick={onGoTop} 
           style={{
-              width: "100%",
-              borderRadius: 14,
-              border: "1px solid rgba(234,179,8,0.55)",
-              padding: "12px 14px",
+              ...sendBtn,
+              marginTop: 8,
               fontWeight: 900,
-              color: "#fff",
-              background:
-                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
               cursor: "pointer",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+              background: "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
             }}
             >
             トップ画面へ戻る

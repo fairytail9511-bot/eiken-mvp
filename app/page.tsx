@@ -307,7 +307,7 @@ export default function HomePage() {
 
   const planCard = (featured?: boolean): React.CSSProperties => ({
     position: "relative",
-    borderRadius: 22,
+    borderRadius: 18,
     padding: featured ? "18px 14px 14px" : "14px 14px 14px",
     background: featured
       ? "linear-gradient(180deg, rgba(255,247,214,0.98) 0%, rgba(255,255,255,0.98) 100%)"

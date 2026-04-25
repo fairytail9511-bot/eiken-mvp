@@ -209,7 +209,7 @@ export default function SpeechClient() {
   }, [elapsedSec]);
 
   // ====== theme ======
-  const gold = "rgba(234, 179, 8, 0.60)";
+  const gold = "rgba(234, 179, 8, 0.8)";
   const goldSoft = "rgba(234, 179, 8, 0.22)";
 
   const pageStyle: React.CSSProperties = {
@@ -218,7 +218,7 @@ export default function SpeechClient() {
     display: "flex",
     justifyContent: "center",
     background:
-      "radial-gradient(1200px 700px at 50% 10%, rgba(255,255,255,0.12), rgba(0,0,0,0) 60%), linear-gradient(180deg, #0b1220 0%, #070a12 55%, #06070d 100%)",
+      "radial-gradient(120% 120% at 50% 0%, #2d3748 0%, #111827 45%, #0a0f1c 100%)",
   };
 
   const shellStyle: React.CSSProperties = {
@@ -238,7 +238,7 @@ export default function SpeechClient() {
     flexDirection: "column",
     gap: 10,
     background:
-      "linear-gradient(180deg, rgba(11,18,32,0.96) 0%, rgba(7,10,18,0.88) 60%, rgba(7,10,18,0) 100%)",
+      "linear-gradient(180deg, rgba(17,24,39,0.96) 0%, rgba(10,15,28,0.88) 60%, rgba(10,15,28,0) 100%)",
     backdropFilter: "blur(6px)",
   };
 
@@ -281,40 +281,40 @@ export default function SpeechClient() {
   const micBtnStyle: React.CSSProperties = {
     flex: "0 0 132px",
     padding: "12px 14px",
-    borderRadius: 12,
+    borderRadius: 999,
     border: `1px solid ${gold}`,
-    color: "#fff",
+    color: "rgba(250, 249, 247, 0.9)",
     background:
       isTranscribing || isStarting || isRecording
         ? "rgba(76, 93, 121, 0.55)"
-        : "linear-gradient(180deg, rgba(0, 67, 211, 1) 0%, rgba(0, 16, 95, 1) 100%)",
+        : "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
     cursor: isTranscribing || isStarting || isRecording ? "not-allowed" : "pointer",
     fontWeight: 900,
-    boxShadow: "0 10px 18px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
   };
 
   const stopBtnStyle: React.CSSProperties = {
     flex: "0 0 132px",
     padding: "12px 14px",
-    borderRadius: 12,
-    border: `1px solid ${gold}`,
-    color: "#fff",
+    borderRadius: 999,
+    border: "1px solid rgba(220,38,38,0.75)",
+    color: "rgba(250, 249, 247, 0.9)",
     background: stopEnabled
       ? "linear-gradient(180deg, rgba(220,38,38,0.95) 0%, rgba(127,29,29,0.95) 100%)"
       : "rgba(254,202,202,0.35)",
     opacity: stopEnabled ? 1 : 0.75,
     cursor: stopEnabled ? "pointer" : "not-allowed",
     fontWeight: 900,
-    boxShadow: "0 10px 18px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
   };
 
   const sendBtn: React.CSSProperties = {
     width: "100%",
     borderRadius: 999,
     border: `1px solid ${gold}`,
-    background: "linear-gradient(180deg, rgba(30,58,138,0.95) 0%, rgba(12,25,66,0.95) 100%)",
-    boxShadow: `0 16px 28px rgba(0,0,0,0.55), inset 0 0 0 1px ${goldSoft}`,
-    color: "#fff",
+    background: "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
+    color: "rgba(250, 249, 247, 0.9)",
     fontWeight: 900,
     padding: "14px 16px",
     cursor: "pointer",
@@ -324,9 +324,9 @@ export default function SpeechClient() {
     width: "100%",
     borderRadius: 999,
     border: `1px solid ${gold}`,
-    background: "linear-gradient(180deg, rgba(6, 18, 248, 0.95) 0%, rgba(0, 5, 90, 0.92) 100%)",
-    boxShadow: `0 16px 28px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.4)`,
-    color: "#fbfbfbff",
+    background: "linear-gradient(180deg, #2d468b 0%, #020617 100%)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15)",
+    color: "rgba(250, 249, 247, 0.9)",
     fontWeight: 900,
     padding: "14px 16px",
     cursor: "pointer",
@@ -602,7 +602,7 @@ export default function SpeechClient() {
                     style={{
                       width: "100%",
                       border: `1px solid ${gold}`,
-                      borderRadius: 12,
+                      borderRadius: 14,
                       padding: 12,
                       fontSize: 14,
                       outline: "none",
@@ -675,17 +675,9 @@ export default function SpeechClient() {
               type="button"
               onClick={onGoTop}
               style={{
-              width: "100%",
-              borderRadius: 14,
-              border: "1px solid rgba(234,179,8,0.55)",
-              padding: "12px 14px",
-              fontWeight: 900,
-              color: "#fff",
-              background:
-                "linear-gradient(180deg, rgba(30,58,138,0.75) 0%, rgba(2,6,23,0.95) 100%)",
-              cursor: "pointer",
-              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
-            }}
+                ...sendBtn,
+                fontWeight: 900,
+              }}
             >
               トップ画面へ戻る
             </button>
