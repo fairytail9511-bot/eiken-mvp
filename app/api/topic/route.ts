@@ -161,7 +161,6 @@ export async function POST(req: Request) {
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        temperature: 0.7,
         // ✅ response_format は使わない（text.format）
       } as any);
 

@@ -12,7 +12,9 @@ const LS_KEY_IS_PRO = "speaking_is_pro";
 const LS_KEY_TRIAL_USED = "speaking_trial_used";
 const LS_KEY_FREE_MONTH = "speaking_free_month";
 const LS_KEY_FREE_COUNT = "speaking_free_count";
-const FREE_LIMIT = 5;
+const LS_KEY_SHOW_PLANS = "eiken_mvp_show_plans";
+const OPEN_PLANS_EVENT = "eiken_mvp_open_plans";
+const FREE_LIMIT = 3;
 
 function monthKeyNow() {
   const d = new Date();
@@ -111,16 +113,31 @@ export default function HomePage() {
   useEffect(() => {
     refreshAccessState();
 
+    const openPlansIfRequested = () => {
+      try {
+        localStorage.removeItem(LS_KEY_SHOW_PLANS);
+      } catch {}
+      setShowPlans(true);
+    };
+
+    try {
+      if (localStorage.getItem(LS_KEY_SHOW_PLANS) === "1") {
+        openPlansIfRequested();
+      }
+    } catch {}
+
     const onFocus = () => refreshAccessState();
     const onVisible = () => {
       if (document.visibilityState === "visible") refreshAccessState();
     };
 
     window.addEventListener("focus", onFocus);
+    window.addEventListener(OPEN_PLANS_EVENT, openPlansIfRequested);
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener(OPEN_PLANS_EVENT, openPlansIfRequested);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refreshAccessState]);
@@ -209,6 +226,10 @@ export default function HomePage() {
 
   function startPurchase(productId: string) {
     if (purchaseBusy) return;
+    if (getIsPro()) {
+      refreshAccessState();
+      return;
+    }
 
     if (!hasIAPBridge()) {
       alert("購入はiOSアプリ内でのみ可能です。");
@@ -254,6 +275,10 @@ export default function HomePage() {
     background:
       "radial-gradient(120% 120% at 50% 0%, #3b4252 0%, #1f2937 45%, #0f172a 100%)",
   };
+
+  const purchaseDisabled = purchaseBusy || isPro;
+  const purchaseButtonLabel = isPro ? "有料プラン利用中" : "このプランを選ぶ";
+  const purchaseButtonOpacity = purchaseDisabled ? 0.6 : 1;
 
   const card: React.CSSProperties = {
     width: "100%",
@@ -489,7 +514,7 @@ export default function HomePage() {
                   }}
                 >
                   {!trialUsed
-                    ? "初回はフル体験できます。その後は月5回まで無料で利用できます。"
+                    ? `初回はフル体験できます。その後は月${FREE_LIMIT}回まで無料で利用できます。`
                     : `現在の無料利用状況：今月 ${Math.min(freeCount, FREE_LIMIT)}/${FREE_LIMIT} 回`}
                 </div>
               ) : null}
@@ -545,15 +570,20 @@ export default function HomePage() {
               <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>松｜月額プラン</div>
               <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>月額5,000円</div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
-                まずは短期間で試したい方向け。
+                本番まで短期集中したい人向け。英会話教室1回分前後の料金で、無制限にAI面接練習・分析・改善例・トレーニングを1ヶ月しっかり使えます。
               </div>
               <button
                 type="button"
                 onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.monthly")}
-                disabled={purchaseBusy}
-                style={{ ...planButton, marginTop: 12, opacity: purchaseBusy ? 0.6 : 1 }}
+                disabled={purchaseDisabled}
+                style={{
+                  ...planButton,
+                  marginTop: 12,
+                  opacity: purchaseButtonOpacity,
+                  cursor: purchaseDisabled ? "not-allowed" : "pointer",
+                }}
               >
-                このプランを選ぶ
+                {purchaseButtonLabel}
               </button>
             </div>
 
@@ -581,15 +611,20 @@ export default function HomePage() {
                 月あたり4,000円
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
-                本番まで継続して練習したい人に最適。価格と継続期間のバランスが最も良いプラン。
+                本番まで計画的にコツコツ対策したい人向け。
               </div>
               <button
                 type="button"
                 onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.3months")}
-                disabled={purchaseBusy}
-                style={{ ...planButton, marginTop: 12, opacity: purchaseBusy ? 0.6 : 1 }}
+                disabled={purchaseDisabled}
+                style={{
+                  ...planButton,
+                  marginTop: 12,
+                  opacity: purchaseButtonOpacity,
+                  cursor: purchaseDisabled ? "not-allowed" : "pointer",
+                }}
               >
-                このプランを選ぶ
+                {purchaseButtonLabel}
               </button>
             </div>
 
@@ -600,15 +635,20 @@ export default function HomePage() {
                 月あたり2,500円
               </div>
               <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
-                長期で英語力全体を鍛えたい方向け。月額換算では最もお得です。
+                最もお得。長期的に計画を立てて着実に実力をつけたい人向け。
               </div>
               <button
                 type="button"
                 onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.yearly")}
-                disabled={purchaseBusy}
-                style={{ ...planButton, marginTop: 12, opacity: purchaseBusy ? 0.6 : 1 }}
+                disabled={purchaseDisabled}
+                style={{
+                  ...planButton,
+                  marginTop: 12,
+                  opacity: purchaseButtonOpacity,
+                  cursor: purchaseDisabled ? "not-allowed" : "pointer",
+                }}
               >
-                このプランを選ぶ
+                {purchaseButtonLabel}
               </button>
             </div>
 

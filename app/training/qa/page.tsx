@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
+import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
 
 type Msg = { role: "examiner" | "user"; text: string };
 
@@ -245,6 +246,7 @@ export default function TrainingQAPage() {
   const [loadingInit, setLoadingInit] = useState(true);
   const [loadingScore, setLoadingScore] = useState(false);
   const [result, setResult] = useState<TrainingQAResult | null>(null);
+  const [accessBlocked, setAccessBlocked] = useState(false);
 
   const isDone = useMemo(() => qIndex >= 4, [qIndex]);
 
@@ -385,6 +387,7 @@ export default function TrainingQAPage() {
 
   async function startRecording() {
     setError("");
+    if (accessBlocked) return;
     if (loadingInit || loadingScore || isDone || result) return;
     if (isRecording || isStarting || isTranscribing) return;
 
@@ -500,8 +503,15 @@ export default function TrainingQAPage() {
     setQIndex(-1);
     setInput("");
     setTopic("");
+    setAccessBlocked(false);
 
     try {
+      const usage = getTrainingUsage();
+      if (!usage.isPro && usage.remaining <= 0) {
+        setAccessBlocked(true);
+        throw new Error(`無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`);
+      }
+
       let trainingTopic = "";
       try {
         const raw = localStorage.getItem("eiken_mvp_training_qa_topic");
@@ -543,6 +553,12 @@ export default function TrainingQAPage() {
 
       if (cleaned.length !== 4) throw new Error("Q&A questions are invalid (need exactly 4)");
 
+      const access = consumeFreeTrainingUse();
+      if (!access.ok) {
+        setAccessBlocked(true);
+        throw new Error(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
+      }
+
       setQuestions(cleaned);
 
       const intro = `We will do topic Q&A training. The topic is: ${trainingTopic}`;
@@ -574,6 +590,7 @@ export default function TrainingQAPage() {
 
   function sendAnswer(forcedText?: string) {
     setError("");
+    if (accessBlocked) return;
     if (loadingInit || loadingScore || result) return;
     if (isRecording || isStarting || isTranscribing) return;
 
@@ -629,6 +646,7 @@ export default function TrainingQAPage() {
 
   async function goToScore() {
     setError("");
+    if (accessBlocked) return;
     if (!topic) {
       setError("トピックがありません。");
       return;
@@ -710,11 +728,13 @@ export default function TrainingQAPage() {
     }
   }
 
-  const canSend = !loadingInit && !isDone && !loadingScore && !isRecording && !isTranscribing && !result;
+  const canSend = !accessBlocked && !loadingInit && !isDone && !loadingScore && !isRecording && !isTranscribing && !result;
   const micDisabled =
-    loadingInit || isDone || loadingScore || isTranscribing || isStarting || isRecording || !!result;
+    accessBlocked || loadingInit || isDone || loadingScore || isTranscribing || isStarting || isRecording || !!result;
 
-  const statusText = loadingInit
+  const statusText = accessBlocked
+    ? "無料枠上限"
+    : loadingInit
     ? "準備中…"
     : loadingScore
     ? "採点中…"

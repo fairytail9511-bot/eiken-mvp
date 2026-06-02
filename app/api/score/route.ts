@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 
 const MODEL_SCORE = "gpt-5.4";
 const apiKey = process.env.OPENAI_API_KEY;
+const FREE_LIMIT = 3;
 
 // DB不要の署名鍵（未設定ならAPIキーから派生）
 const LIMIT_SECRET =
@@ -22,7 +23,7 @@ type TokenPayload = {
   v: 1;
   trialUsed: boolean; // 初回フル体験を使ったか
   month: string; // YYYY-MM
-  used: number; // 今月の無料採点回数（0..5）
+  used: number; // 今月の無料採点回数（0..FREE_LIMIT）
   iat: number; // 発行時刻
 };
 
@@ -485,15 +486,15 @@ export async function POST(req: Request) {
     } else if (!payload.trialUsed) {
       accessMode = "trial";
     } else {
-      if (payload.used >= 5) {
+      if (payload.used >= FREE_LIMIT) {
         const tokenOut = signPayload(payload);
         return NextResponse.json(
           {
             paywall: true,
-            message: "無料枠（月5回）に達しました。続きは有料プランで解放されます。",
+            message: `無料枠（月${FREE_LIMIT}回）に達しました。続きは有料プランで解放されます。`,
             accessToken: tokenOut,
             usedThisMonth: payload.used,
-            limit: 5,
+            limit: FREE_LIMIT,
           },
           { status: 402 }
         );
@@ -609,7 +610,7 @@ export async function POST(req: Request) {
       accessMode,
       accessToken: tokenOut,
       usedThisMonth: payload.used,
-      limit: 5,
+      limit: FREE_LIMIT,
       ...(normalized as any),
     });
   } catch (e: any) {

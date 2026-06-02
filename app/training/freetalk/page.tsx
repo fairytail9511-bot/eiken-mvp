@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
 
 type Msg = { role: "examiner" | "user"; text: string };
 
@@ -100,6 +101,7 @@ export default function TrainingFreeTalkPage() {
   const [loadingInit, setLoadingInit] = useState(true);
   const [loadingReply, setLoadingReply] = useState(false);
   const [result, setResult] = useState<FreeTalkResult | null>(null);
+  const [accessBlocked, setAccessBlocked] = useState(false);
 
   const startedAtRef = useRef<number>(Date.now());
   const didInitRef = useRef(false);
@@ -209,6 +211,7 @@ export default function TrainingFreeTalkPage() {
 
   async function startRecording() {
     setError("");
+    if (accessBlocked) return;
     if (loadingInit || loadingReply || result) return;
     if (isRecording || isStarting || isTranscribing) return;
 
@@ -320,8 +323,15 @@ export default function TrainingFreeTalkPage() {
     setResult(null);
     startedAtRef.current = Date.now();
     lastSpokenRef.current = "";
+    setAccessBlocked(false);
 
     try {
+      const usage = getTrainingUsage();
+      if (!usage.isPro && usage.remaining <= 0) {
+        setAccessBlocked(true);
+        throw new Error(`無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`);
+      }
+
       const res = await fetch("/api/freetalk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -340,6 +350,12 @@ export default function TrainingFreeTalkPage() {
 
       if (!text) throw new Error("Opening message was not returned");
 
+      const access = consumeFreeTrainingUse();
+      if (!access.ok) {
+        setAccessBlocked(true);
+        throw new Error(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
+      }
+
       setMsgs([{ role: "examiner", text }]);
       await speakNow(text);
     } catch (e: any) {
@@ -357,6 +373,7 @@ export default function TrainingFreeTalkPage() {
 
   async function sendAnswer(forcedText?: string) {
     setError("");
+    if (accessBlocked) return;
     if (loadingInit || loadingReply || result) return;
     if (isRecording || isStarting || isTranscribing) return;
 
@@ -421,6 +438,7 @@ export default function TrainingFreeTalkPage() {
   }
 
   function finishNow() {
+    if (accessBlocked) return;
     const closing = "Thank you. This concludes the Free Talk training.";
     const finalLogs = [...msgs, { role: "examiner" as const, text: closing }];
     setMsgs(finalLogs);
@@ -432,12 +450,14 @@ export default function TrainingFreeTalkPage() {
   }
 
   const canSend =
-    !loadingInit && !loadingReply && !isRecording && !isTranscribing && !result;
+    !accessBlocked && !loadingInit && !loadingReply && !isRecording && !isTranscribing && !result;
 
   const micDisabled =
-    loadingInit || loadingReply || isTranscribing || isStarting || isRecording || !!result;
+    accessBlocked || loadingInit || loadingReply || isTranscribing || isStarting || isRecording || !!result;
 
-  const statusText = loadingInit
+  const statusText = accessBlocked
+    ? "無料枠上限"
+    : loadingInit
     ? "準備中…"
     : loadingReply
     ? "返答生成中…"

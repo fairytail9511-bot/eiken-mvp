@@ -51,8 +51,7 @@ async function callOpenAI(system: string, user: string) {
     },
     body: JSON.stringify({
       model: "gpt-5.4-mini",
-      temperature: 0.9,
-      max_tokens: 120,
+      max_completion_tokens: 120,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },

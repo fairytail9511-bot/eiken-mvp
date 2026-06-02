@@ -3,21 +3,26 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-
-function getIsPro(): boolean {
-  try {
-    return localStorage.getItem("speaking_is_pro") === "1";
-  } catch {
-    return false;
-  }
-}
+import { getTrainingUsage, type TrainingUsage } from "@/app/lib/trainingAccess";
 
 export default function TrainingPage() {
-  const [isPro, setIsPro] = useState(false);
+  const [usage, setUsage] = useState<TrainingUsage>({
+    isPro: false,
+    used: 0,
+    limit: 2,
+    remaining: 2,
+  });
 
   useEffect(() => {
-    setIsPro(getIsPro());
+    setUsage(getTrainingUsage());
   }, []);
+
+  const isPro = usage.isPro;
+  const canUseFreeTraining = isPro || usage.remaining > 0;
+  const usageText = isPro
+    ? "有料：トレーニング無制限"
+    : `無料：トレーニング月${usage.limit}回まで（今月 ${Math.min(usage.used, usage.limit)}/${usage.limit} 回）`;
+  const blockedMessage = `無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`;
 
   const pageBg: React.CSSProperties = {
     minHeight: "100vh",
@@ -127,10 +132,10 @@ export default function TrainingPage() {
         <div style={subStyle}>
           面接本番とは別に、目的ごとに練習できます。
           {"\n"}トレーニング結果は記録には保存されません。
-          {"\n"}有料プランでは3種類のトレーニングを利用できます。
+          {"\n"}{usageText}
         </div>
 
-        {isPro ? (
+        {canUseFreeTraining ? (
           <Link href="/training/speech" style={cardLinkStyle}>
             <div style={cardTitleStyle}>🗣 Speechトレーニング</div>
             <div style={cardDescStyle}>
@@ -141,19 +146,19 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert("Speechトレーニングは有料プランで解放されます。")}
+            onClick={() => alert(blockedMessage)}
             style={lockedCardStyle}
           >
             <div style={cardTitleStyle}>🗣 Speechトレーニング</div>
             <div style={cardDescStyle}>
               トピックに対してSpeechだけを練習します。
               {"\n"}結果ではSpeechの採点・評価理由・原文・改善例を確認できます。
-              {"\n"}🔒 有料プラン限定
+              {"\n"}🔒 無料枠を使い切りました
             </div>
           </button>
         )}
 
-        {isPro ? (
+        {canUseFreeTraining ? (
           <Link href="/training/qa" style={cardLinkStyle}>
             <div style={cardTitleStyle}>💬 Q&amp;Aトレーニング</div>
             <div style={cardDescStyle}>
@@ -164,19 +169,19 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert("Q&Aトレーニングは有料プランで解放されます。")}
+            onClick={() => alert(blockedMessage)}
             style={lockedCardStyle}
           >
             <div style={cardTitleStyle}>💬 Q&amp;Aトレーニング</div>
             <div style={cardDescStyle}>
               あらかじめ決まったトピックに対して4問のQ&amp;Aを行います。
               {"\n"}結果ではQ&amp;Aの採点・評価理由・原文・改善例を確認できます。
-              {"\n"}🔒 有料プラン限定
+              {"\n"}🔒 無料枠を使い切りました
             </div>
           </button>
         )}
 
-        {isPro ? (
+        {canUseFreeTraining ? (
           <Link href="/training/freetalk" style={cardLinkStyle}>
             <div style={cardTitleStyle}>☕ Free Talk</div>
             <div style={cardDescStyle}>
@@ -187,14 +192,14 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert("Free Talkは有料プランで解放されます。")}
+            onClick={() => alert(blockedMessage)}
             style={lockedCardStyle}
           >
             <div style={cardTitleStyle}>☕ Free Talk</div>
             <div style={cardDescStyle}>
               面接官との自然な会話を練習します。
               {"\n"}最大20回まで会話し、結果では会話ログのみを確認できます。
-              {"\n"}🔒 有料プラン限定
+              {"\n"}🔒 無料枠を使い切りました
             </div>
           </button>
         )}
@@ -206,7 +211,7 @@ export default function TrainingPage() {
         <div style={footerNote}>
           ※ 設定の難易度・表示設定・アバター設定を反映します
           {"\n"}※ トレーニング結果は保存されません
-          {"\n"}※ 各トレーニングは有料プランで解放されます
+          {"\n"}※ 無料枠は3種類のトレーニング合算です
         </div>
       </div>
     </main>

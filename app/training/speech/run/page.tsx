@@ -5,6 +5,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
 
 type ThreeBlock = {
   didWell: string;
@@ -176,10 +177,13 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   const [speech, setSpeech] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [result, setResult] = useState<SpeechTrainingResult | null>(null);
+  const [trainingAccessGranted, setTrainingAccessGranted] = useState(false);
+  const [accessBlocked, setAccessBlocked] = useState(false);
 
   const LIMIT_SEC = 120;
   const [tick, setTick] = useState(0);
   const startedAtRef = useRef<number>(Date.now());
+  const trainingAccessGrantedRef = useRef(false);
 
   const showPrepTime = useMemo(() => {
     try {
@@ -316,6 +320,25 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   useEffect(() => {
     if (!topic) return;
     if (didSpeakRef.current) return;
+
+    const usage = getTrainingUsage();
+    if (!usage.isPro && usage.remaining <= 0) {
+      setError(`無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`);
+      setAccessBlocked(true);
+      didSpeakRef.current = true;
+      return;
+    }
+
+    const access = consumeFreeTrainingUse();
+    if (!access.ok) {
+      setError(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
+      setAccessBlocked(true);
+      didSpeakRef.current = true;
+      return;
+    }
+
+    trainingAccessGrantedRef.current = true;
+    setTrainingAccessGranted(true);
     didSpeakRef.current = true;
 
     let timerId: number | null = null;
@@ -347,6 +370,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
 
   async function startRecording() {
     setError("");
+    if (!trainingAccessGrantedRef.current || accessBlocked) return;
     if (result) return;
     if (isRecording || isStarting || isTranscribing || isScoring) return;
 
@@ -449,6 +473,10 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
 
   async function submitSpeech(speechOverride?: string) {
     setError("");
+    if (!trainingAccessGrantedRef.current || accessBlocked) {
+      setError("無料トレーニング枠が利用できません。");
+      return;
+    }
 
     const t = (topic ?? "").trim();
     const s = (speechOverride ?? speech ?? "").trim();
@@ -526,6 +554,15 @@ const score = buildSpeechScore(s, blocks, feedback);
   }
 
   function onRetrySameTopic() {
+    const access = consumeFreeTrainingUse();
+    if (!access.ok) {
+      setError(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
+      setAccessBlocked(true);
+      return;
+    }
+
+    trainingAccessGrantedRef.current = true;
+    setTrainingAccessGranted(true);
     setResult(null);
     setError("");
     setSpeech("");
@@ -543,7 +580,7 @@ const score = buildSpeechScore(s, blocks, feedback);
     router.push("/");
   }
 
-  const canSubmit = !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
+  const canSubmit = trainingAccessGranted && !accessBlocked && !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
 
   const gold = "rgba(234, 179, 8, 0.60)";
   const goldSoft = "rgba(234, 179, 8, 0.22)";
@@ -630,10 +667,10 @@ const score = buildSpeechScore(s, blocks, feedback);
     border: `1px solid ${gold}`,
     color: "#fff",
     background:
-      isTranscribing || isStarting || isRecording || !!result
+      !trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || !!result
         ? "rgba(76, 93, 121, 0.55)"
         : "linear-gradient(180deg, rgba(0, 67, 211, 1) 0%, rgba(0, 16, 95, 1) 100%)",
-    cursor: isTranscribing || isStarting || isRecording || !!result ? "not-allowed" : "pointer",
+    cursor: !trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || !!result ? "not-allowed" : "pointer",
     fontWeight: 900,
     boxShadow: "0 10px 18px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.05)",
   };
@@ -742,7 +779,7 @@ const score = buildSpeechScore(s, blocks, feedback);
                     type="button"
                     onClick={startRecording}
                     style={micBtnStyle}
-                    disabled={isTranscribing || isStarting || isRecording || isScoring || !!result}
+                    disabled={!trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || isScoring || !!result}
                   >
                     🎤 Mic
                   </button>
