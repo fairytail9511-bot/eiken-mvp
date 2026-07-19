@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { LS_KEYS } from "@/app/types";
 import Image from "next/image";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 
 /* =====================
    Types
@@ -152,22 +153,18 @@ export default function SmalltalkPage() {
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
       const parsed = raw ? JSON.parse(raw) : {};
-      return parsed.avatarGender === "male" || parsed.avatarGender === "female"
-        ? parsed.avatarGender
-        : "female";
+      return isAvatarId(parsed.avatarGender) ? parsed.avatarGender : "female";
     } catch {
       return "female";
     }
   }, []);
 
-  const ttsGender: TtsGender = avatarGender === "male" ? "male" : "female";
+  const avatarConfig = getAvatarConfig(avatarGender);
+  const ttsGender: TtsGender = avatarGender;
+  const AVATAR_EXAMINER_CLOSED = avatarConfig.closedImage;
+  const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
-  const AVATAR_EXAMINER_CLOSED =
-    avatarGender === "female" ? "/avatars/female_closed_v.png" : "/avatars/male_closed_v.png";
-  const AVATAR_EXAMINER_OPEN =
-    avatarGender === "female" ? "/avatars/female_open_v.png" : "/avatars/male_open_v.png";
-
-  const candidateName = avatarGender === "female" ? "Amanda" : "Gabriel";
+  const candidateName = avatarConfig.smallTalkName;
 
   // ===== Mouth flap =====
   const [isExaminerSpeaking, setIsExaminerSpeaking] = useState(false);

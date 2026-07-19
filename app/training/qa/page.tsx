@@ -5,6 +5,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
+import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
+import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
+
+const TRAINING_AUDIO_SESSION = "training-qa-latest";
 import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
 
 type Msg = { role: "examiner" | "user"; text: string };
@@ -210,9 +215,7 @@ export default function TrainingQAPage() {
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
       const parsed = raw ? JSON.parse(raw) : {};
-      return parsed.avatarGender === "male" || parsed.avatarGender === "female"
-        ? parsed.avatarGender
-        : "female";
+      return isAvatarId(parsed.avatarGender) ? parsed.avatarGender : "female";
     } catch {
       return "female";
     }
@@ -229,12 +232,10 @@ export default function TrainingQAPage() {
     }
   }, []);
 
-  const ttsGender: TtsGender = avatarGender === "male" ? "male" : "female";
-
-  const AVATAR_EXAMINER_CLOSED =
-    avatarGender === "female" ? "/avatars/female_closed_v.png" : "/avatars/male_closed_v.png";
-  const AVATAR_EXAMINER_OPEN =
-    avatarGender === "female" ? "/avatars/female_open_v.png" : "/avatars/male_open_v.png";
+  const avatarConfig = getAvatarConfig(avatarGender);
+  const ttsGender: TtsGender = avatarGender;
+  const AVATAR_EXAMINER_CLOSED = avatarConfig.closedImage;
+  const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
   const [topic, setTopic] = useState("");
   const [questions, setQuestions] = useState<string[]>([]);
@@ -430,6 +431,12 @@ export default function TrainingQAPage() {
           const blob = new Blob(chunksRef.current, { type: finalMime });
           chunksRef.current = [];
 
+          if (qIndex >= 0 && qIndex <= 3) {
+            try {
+              await saveLocalRecording(TRAINING_AUDIO_SESSION, `qa-${qIndex}`, blob);
+            } catch {}
+          }
+
           const fd = new FormData();
           const ext = extFromMime(finalMime);
           fd.append("file", blob, `answer.${ext}`);
@@ -492,6 +499,7 @@ export default function TrainingQAPage() {
   }
 
   async function initTrainingQa() {
+    await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     setLoadingInit(true);
     setError("");
     startedAtRef.current = Date.now();
@@ -1120,6 +1128,20 @@ export default function TrainingQAPage() {
               <div style={resultCard}>
                 <div style={sectionTitle}>トピック</div>
                 <div style={{ fontSize: 13, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>{result.topic}</div>
+              </div>
+
+              <div style={resultCard}>
+                <div style={sectionTitle}>自分の録音音声</div>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {[0, 1, 2, 3].map((index) => (
+                    <LocalRecordingPlayer
+                      key={index}
+                      sessionId={TRAINING_AUDIO_SESSION}
+                      part={`qa-${index}`}
+                      label={`Q&A ${index + 1}`}
+                    />
+                  ))}
+                </div>
               </div>
 
               <div style={resultCard}>

@@ -7,6 +7,8 @@ import Image from "next/image";
 
 import { LS_KEYS, type PendingInterview } from "@/app/types";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import { createRecordingSessionId, saveLocalRecording } from "@/app/lib/localRecordings";
 
 // ====== 🎤 helpers ======
 function pickBestMimeType() {
@@ -43,6 +45,12 @@ export default function SpeechClient() {
   const [topic, setTopic] = useState<string>(topicFromQuery);
   const [speech, setSpeech] = useState<string>("");
   const [error, setError] = useState<string>("");
+  const audioSessionIdRef = useRef("");
+
+  function getAudioSessionId() {
+    if (!audioSessionIdRef.current) audioSessionIdRef.current = createRecordingSessionId();
+    return audioSessionIdRef.current;
+  }
 
   const [phase, setPhase] = useState<"speech" | "handoff">("speech");
 
@@ -78,20 +86,16 @@ export default function SpeechClient() {
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
       const parsed = raw ? JSON.parse(raw) : {};
-      return parsed.avatarGender === "male" || parsed.avatarGender === "female"
-        ? parsed.avatarGender
-        : "female";
+      return isAvatarId(parsed.avatarGender) ? parsed.avatarGender : "female";
     } catch {
       return "female";
     }
   }, []);
 
-  const ttsGender: TtsGender = avatarGender === "male" ? "male" : "female";
-
-  const AVATAR_EXAMINER_CLOSED =
-    avatarGender === "female" ? "/avatars/female_closed_v.png" : "/avatars/male_closed_v.png";
-  const AVATAR_EXAMINER_OPEN =
-    avatarGender === "female" ? "/avatars/female_open_v.png" : "/avatars/male_open_v.png";
+  const avatarConfig = getAvatarConfig(avatarGender);
+  const ttsGender: TtsGender = avatarGender;
+  const AVATAR_EXAMINER_CLOSED = avatarConfig.closedImage;
+  const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
   // ✅ Mouth animation states
   const [isMouthOpen, setIsMouthOpen] = useState(false);
@@ -372,6 +376,10 @@ export default function SpeechClient() {
           const blob = new Blob(chunksRef.current, { type: finalMime });
           chunksRef.current = [];
 
+          try {
+            await saveLocalRecording(getAudioSessionId(), "speech", blob);
+          } catch {}
+
           const fd = new FormData();
           const ext = extFromMime(finalMime);
           fd.append("file", blob, `speech.${ext}`);
@@ -455,6 +463,7 @@ export default function SpeechClient() {
       topic: t,
       speech: s,
       startedAt: new Date().toISOString(),
+      audioSessionId: getAudioSessionId(),
     };
 
     try {

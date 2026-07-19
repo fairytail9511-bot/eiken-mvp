@@ -1,5 +1,7 @@
 // app/lib/tts.ts
-export type TtsGender = "female" | "male";
+import type { AvatarId } from "@/app/lib/avatars";
+
+export type TtsGender = AvatarId;
 
 /**
  * ✅ iOS/Safari 安定化方針

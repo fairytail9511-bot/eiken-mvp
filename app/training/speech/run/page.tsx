@@ -5,6 +5,11 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
+import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
+
+const TRAINING_AUDIO_SESSION = "training-speech-latest";
 import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
 
 type ThreeBlock = {
@@ -176,6 +181,10 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   const [topic, setTopic] = useState<string>(topicFromQuery);
   const [speech, setSpeech] = useState<string>("");
   const [error, setError] = useState<string>("");
+
+  useEffect(() => {
+    void clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
+  }, []);
   const [result, setResult] = useState<SpeechTrainingResult | null>(null);
   const [trainingAccessGranted, setTrainingAccessGranted] = useState(false);
   const [accessBlocked, setAccessBlocked] = useState(false);
@@ -209,20 +218,16 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
       const parsed = raw ? JSON.parse(raw) : {};
-      return parsed.avatarGender === "male" || parsed.avatarGender === "female"
-        ? parsed.avatarGender
-        : "female";
+      return isAvatarId(parsed.avatarGender) ? parsed.avatarGender : "female";
     } catch {
       return "female";
     }
   }, []);
 
-  const ttsGender: TtsGender = avatarGender === "male" ? "male" : "female";
-
-  const AVATAR_EXAMINER_CLOSED =
-    avatarGender === "female" ? "/avatars/female_closed_v.png" : "/avatars/male_closed_v.png";
-  const AVATAR_EXAMINER_OPEN =
-    avatarGender === "female" ? "/avatars/female_open_v.png" : "/avatars/male_open_v.png";
+  const avatarConfig = getAvatarConfig(avatarGender);
+  const ttsGender: TtsGender = avatarGender;
+  const AVATAR_EXAMINER_CLOSED = avatarConfig.closedImage;
+  const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
   const examinerLine = "You have two minutes. Please begin.";
 
@@ -409,6 +414,10 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
           const blob = new Blob(chunksRef.current, { type: finalMime });
           chunksRef.current = [];
 
+          try {
+            await saveLocalRecording(TRAINING_AUDIO_SESSION, "speech", blob);
+          } catch {}
+
           const fd = new FormData();
           const ext = extFromMime(finalMime);
           fd.append("file", blob, `speech.${ext}`);
@@ -554,6 +563,7 @@ const score = buildSpeechScore(s, blocks, feedback);
   }
 
   function onRetrySameTopic() {
+    void clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     const access = consumeFreeTrainingUse();
     if (!access.ok) {
       setError(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
@@ -869,6 +879,15 @@ const score = buildSpeechScore(s, blocks, feedback);
                   <br />
                   所要時間：{formatDuration(result.durationSec)}
                 </div>
+              </div>
+
+              <div style={resultCard}>
+                <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 8 }}>自分の録音音声</div>
+                <LocalRecordingPlayer
+                  sessionId={TRAINING_AUDIO_SESSION}
+                  part="speech"
+                  label="今回のスピーチ"
+                />
               </div>
 
               <div style={resultCard}>
