@@ -16,6 +16,8 @@ import type {
 import { LS_KEYS } from "@/app/types";
 
 import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
+import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import { saveLocalRecording } from "@/app/lib/localRecordings";
 
 const LS_KEY_IS_PRO = "speaking_is_pro";
 const LS_KEY_TRIAL_USED = "speaking_trial_used";
@@ -149,15 +151,14 @@ export default function QAPage() {
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
       const parsed = raw ? JSON.parse(raw) : {};
-      return parsed.avatarGender === "male" || parsed.avatarGender === "female"
-        ? parsed.avatarGender
-        : "female";
+      return isAvatarId(parsed.avatarGender) ? parsed.avatarGender : "female";
     } catch {
       return "female";
     }
   }, []);
 
-  const ttsGender: TtsGender = avatarGender === "male" ? "male" : "female";
+  const avatarConfig = getAvatarConfig(avatarGender);
+  const ttsGender: TtsGender = avatarGender;
 
   const showTranscript = useMemo(() => {
     if (typeof window === "undefined") return true;
@@ -170,10 +171,8 @@ export default function QAPage() {
     }
   }, []);
 
-  const AVATAR_EXAMINER_CLOSED =
-    avatarGender === "female" ? "/avatars/female_closed_v.png" : "/avatars/male_closed_v.png";
-  const AVATAR_EXAMINER_OPEN =
-    avatarGender === "female" ? "/avatars/female_open_v.png" : "/avatars/male_open_v.png";
+  const AVATAR_EXAMINER_CLOSED = avatarConfig.closedImage;
+  const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
   const [pending, setPending] = useState<PendingInterview | null>(null);
 
@@ -374,6 +373,12 @@ export default function QAPage() {
           const finalMime = mimeRef.current || mr.mimeType || "audio/webm";
           const blob = new Blob(chunksRef.current, { type: finalMime });
           chunksRef.current = [];
+
+          if (pending?.audioSessionId && qIndex >= 0 && qIndex <= 3) {
+            try {
+              await saveLocalRecording(pending.audioSessionId, `qa-${qIndex}`, blob);
+            } catch {}
+          }
 
           const fd = new FormData();
           const ext = extFromMime(finalMime);
@@ -672,6 +677,7 @@ export default function QAPage() {
         JSON.stringify({
           topic: pending.topic,
           finishedAt: new Date().toISOString(),
+          audioSessionId: pending.audioSessionId,
           difficulty,
           accessMode: data.accessMode ?? (getIsPro() ? "pro" : "free"),
           usedThisMonth: data.usedThisMonth,

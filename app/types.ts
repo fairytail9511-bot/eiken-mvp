@@ -50,6 +50,7 @@ export type PendingInterview = {
   topic: string;
   speech: string;
   startedAt?: string;
+  audioSessionId?: string;
 };
 
 export type LastSessionLogs = {
@@ -61,6 +62,7 @@ export type LastSessionLogs = {
 export type LastSession = {
   topic: string;
   finishedAt: string;
+  audioSessionId?: string;
   scoreResult: ScoreResult;
   logs: LastSessionLogs;
   transcript: string;

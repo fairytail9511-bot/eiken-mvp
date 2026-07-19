@@ -10,7 +10,15 @@ function asString(v: any, fallback = "") {
 function pickVoiceId(gender: string) {
   const femaleId = process.env.ELEVENLABS_VOICE_FEMALE_ID;
   const maleId = process.env.ELEVENLABS_VOICE_MALE_ID;
+  const maleJapaneseId = process.env.ELEVENLABS_VOICE_MALEJAPANESE_ID;
+  const femaleJapaneseId = process.env.ELEVENLABS_VOICE_FEMALEJAPANESE_ID;
+  const maleBritishId = process.env.ELEVENLABS_VOICE_BRITISHMALE_ID;
+  const femaleBritishId = process.env.ELEVENLABS_VOICE_BRITISHFEMALE_ID;
   const g = String(gender ?? "female").toLowerCase();
+  if (g === "malejapanese") return maleJapaneseId;
+  if (g === "femalejapanese") return femaleJapaneseId;
+  if (g === "malebritish") return maleBritishId;
+  if (g === "femalebritish") return femaleBritishId;
   return g === "male" ? maleId : femaleId;
 }
 
@@ -20,15 +28,6 @@ export async function POST(req: Request) {
     if (!apiKey) {
       return NextResponse.json(
         { ok: false, error: "ELEVENLABS_API_KEY is missing in .env.local" },
-        { status: 500 }
-      );
-    }
-
-    const femaleId = process.env.ELEVENLABS_VOICE_FEMALE_ID;
-    const maleId = process.env.ELEVENLABS_VOICE_MALE_ID;
-    if (!femaleId || !maleId) {
-      return NextResponse.json(
-        { ok: false, error: "ELEVENLABS_VOICE_FEMALE_ID / ELEVENLABS_VOICE_MALE_ID is missing in .env.local" },
         { status: 500 }
       );
     }
@@ -44,7 +43,7 @@ export async function POST(req: Request) {
     const voiceId = pickVoiceId(gender);
     if (!voiceId) {
       return NextResponse.json(
-        { ok: false, error: "voiceId is missing" },
+        { ok: false, error: `ElevenLabs voice ID is missing for ${gender}` },
         { status: 500 }
       );
     }

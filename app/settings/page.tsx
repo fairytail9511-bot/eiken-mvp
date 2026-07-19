@@ -3,13 +3,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { AVATAR_OPTIONS, isAvatarId, type AvatarId } from "@/app/lib/avatars";
 
 /* =====================
    Types & Defaults
 ===================== */
 type InterviewSettings = {
   difficulty: "easy" | "real" | "hard";
-  avatarGender: "male" | "female";
+  avatarGender: AvatarId;
   showTranscript: boolean;
   showPrepTime: boolean;
 };
@@ -38,7 +39,7 @@ export default function SettingsPage() {
       const parsed = JSON.parse(raw);
       setSettings({
         difficulty: parsed.difficulty ?? DEFAULT_SETTINGS.difficulty,
-        avatarGender: parsed.avatarGender ?? DEFAULT_SETTINGS.avatarGender,
+        avatarGender: isAvatarId(parsed.avatarGender) ? parsed.avatarGender : DEFAULT_SETTINGS.avatarGender,
         showTranscript:
           typeof parsed.showTranscript === "boolean"
             ? parsed.showTranscript
@@ -256,10 +257,7 @@ export default function SettingsPage() {
           {/* ===== アバター性別 ===== */}
           <div style={sectionTitle}>面接官アバター</div>
           <div style={segmentedWrap}>
-            {[
-              { key: "female", label: "女性" },
-              { key: "male", label: "男性" },
-            ].map((g) => {
+            {AVATAR_OPTIONS.map((g) => {
               const active = settings.avatarGender === g.key;
               return (
                 <button

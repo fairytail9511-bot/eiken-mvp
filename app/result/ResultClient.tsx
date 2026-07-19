@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 
 /* =====================
    Types
@@ -50,6 +51,7 @@ type ScoreResultAny = {
 type SessionData = {
   topic?: string;
   finishedAt?: string;
+  audioSessionId?: string;
   difficulty?: "easy" | "real" | "hard" | string;
   durationSec?: number;
   transcript?: string;
@@ -129,6 +131,7 @@ function safeJsonParse<T>(raw: string | null): T | null {
     return null;
   }
 }
+
 
 function asInt(n: any, fallback = 0) {
   const x = Number(n);
@@ -1103,6 +1106,33 @@ export default function ResultClient() {
                       <b>{m.role === "examiner" ? "Examiner" : "You"}:</b> {m.text}
                     </div>
                   ))}
+                </div>
+              )}
+            </Accordion>
+
+            <Accordion icon={<span>🎙️</span>} title="自分の録音音声">
+              {!sessionData?.audioSessionId ? (
+                <div style={{ fontSize: 13, color: "#374151" }}>
+                  この受験記録には録音音声が保存されていません。
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <LocalRecordingPlayer
+                    sessionId={sessionData.audioSessionId}
+                    part="speech"
+                    label="2分間スピーチ"
+                  />
+                  {[0, 1, 2, 3].map((index) => (
+                    <LocalRecordingPlayer
+                      key={index}
+                      sessionId={sessionData.audioSessionId}
+                      part={`qa-${index}`}
+                      label={`Q&A ${index + 1}`}
+                    />
+                  ))}
+                  <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
+                    録音はこの端末のブラウザ内に保存されています。ブラウザのデータを削除すると再生できなくなります。
+                  </div>
                 </div>
               )}
             </Accordion>
