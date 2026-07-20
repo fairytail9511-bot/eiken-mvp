@@ -410,8 +410,10 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
         try {
           setIsTranscribing(true);
 
-          const finalMime = mimeRef.current || "audio/webm";
-          const blob = new Blob(chunksRef.current, { type: finalMime });
+          const recordedChunks = chunksRef.current;
+          const chunkMime = recordedChunks[0] instanceof Blob ? recordedChunks[0].type : "";
+          const finalMime = chunkMime || recorder.mimeType || mimeRef.current || "audio/webm";
+          const blob = new Blob(recordedChunks, { type: finalMime });
           chunksRef.current = [];
 
           try {

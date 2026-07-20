@@ -55,7 +55,29 @@ export async function loadLocalRecording(sessionId: string, part: RecordingPart)
     return await new Promise<Blob | null>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, "readonly");
       const request = tx.objectStore(STORE_NAME).get(recordingKey(sessionId, part));
-      request.onsuccess = () => resolve(request.result instanceof Blob ? request.result : null);
+      request.onsuccess = async () => {
+        const blob = request.result instanceof Blob ? request.result : null;
+        if (!blob) {
+          resolve(null);
+          return;
+        }
+
+        // iOS/Safari can record MP4 even when MediaRecorder's selected MIME type
+        // was not exposed correctly. Recover recordings previously stored as WebM
+        // by recognizing the MP4 `ftyp` signature and correcting only the label.
+        if (blob.type.includes("webm") || !blob.type) {
+          try {
+            const header = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+            const signature = String.fromCharCode(...header.slice(4, 8));
+            if (signature === "ftyp") {
+              resolve(new Blob([blob], { type: "audio/mp4" }));
+              return;
+            }
+          } catch {}
+        }
+
+        resolve(blob);
+      };
       request.onerror = () => reject(request.error ?? new Error("Failed to load recording"));
     });
   } finally {
