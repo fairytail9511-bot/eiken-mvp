@@ -52,6 +52,64 @@ function difficultyLabel(v: string) {
 }
 
 const MAX_TURNS = 20;
+const ACTIVE_FREETALK_KEY = "eiken_mvp_training_freetalk_active";
+const ACTIVE_FREETALK_TTL_MS = 6 * 60 * 60 * 1000;
+
+type PersistedFreeTalk = {
+  version: 1;
+  savedAt: number;
+  startedAt: number;
+  difficulty: string;
+  msgs: Msg[];
+};
+
+function loadActiveFreeTalk(): PersistedFreeTalk | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_FREETALK_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedFreeTalk>;
+    const savedAt = Number(parsed.savedAt);
+    const startedAt = Number(parsed.startedAt);
+    if (
+      parsed.version !== 1 ||
+      !Number.isFinite(savedAt) ||
+      !Number.isFinite(startedAt) ||
+      Date.now() - savedAt > ACTIVE_FREETALK_TTL_MS ||
+      !Array.isArray(parsed.msgs) ||
+      parsed.msgs.length === 0
+    ) {
+      localStorage.removeItem(ACTIVE_FREETALK_KEY);
+      return null;
+    }
+
+    const msgs = parsed.msgs
+      .filter(
+        (message): message is Msg =>
+          !!message &&
+          (message.role === "examiner" || message.role === "user") &&
+          typeof message.text === "string" &&
+          !!message.text.trim()
+      )
+      .slice(-50);
+    if (msgs.length === 0) return null;
+
+    return {
+      version: 1,
+      savedAt,
+      startedAt,
+      difficulty: String(parsed.difficulty ?? "real"),
+      msgs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearActiveFreeTalk() {
+  try {
+    localStorage.removeItem(ACTIVE_FREETALK_KEY);
+  } catch {}
+}
 
 export default function TrainingFreeTalkPage() {
   const router = useRouter();
@@ -106,6 +164,7 @@ export default function TrainingFreeTalkPage() {
 
   const startedAtRef = useRef<number>(Date.now());
   const didInitRef = useRef(false);
+  const persistenceReadyRef = useRef(false);
 
   const [isMouthOpen, setIsMouthOpen] = useState(false);
   const mouthTimerRef = useRef<number | null>(null);
@@ -322,6 +381,8 @@ export default function TrainingFreeTalkPage() {
   }
 
   async function initFreeTalk() {
+    persistenceReadyRef.current = false;
+    clearActiveFreeTalk();
     await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     setLoadingInit(true);
     setError("");
@@ -364,6 +425,7 @@ export default function TrainingFreeTalkPage() {
       }
 
       setMsgs([{ role: "examiner", text }]);
+      persistenceReadyRef.current = true;
       await speakNow(text);
     } catch (e: any) {
       setError(e?.message ?? "Free Talkの開始に失敗しました。");
@@ -375,8 +437,34 @@ export default function TrainingFreeTalkPage() {
   useEffect(() => {
     if (didInitRef.current) return;
     didInitRef.current = true;
+
+    const restored = loadActiveFreeTalk();
+    if (restored && restored.difficulty === difficulty) {
+      startedAtRef.current = restored.startedAt;
+      const lastExaminer = [...restored.msgs].reverse().find((message) => message.role === "examiner");
+      lastSpokenRef.current = lastExaminer?.text ?? "";
+      setMsgs(restored.msgs);
+      setLoadingInit(false);
+      persistenceReadyRef.current = true;
+      return;
+    }
+
     void initFreeTalk();
   }, [difficulty]);
+
+  useEffect(() => {
+    if (!persistenceReadyRef.current || result || msgs.length === 0) return;
+    const payload: PersistedFreeTalk = {
+      version: 1,
+      savedAt: Date.now(),
+      startedAt: startedAtRef.current,
+      difficulty,
+      msgs,
+    };
+    try {
+      localStorage.setItem(ACTIVE_FREETALK_KEY, JSON.stringify(payload));
+    } catch {}
+  }, [difficulty, msgs, result]);
 
   async function sendAnswer(forcedText?: string) {
     setError("");
@@ -402,6 +490,7 @@ export default function TrainingFreeTalkPage() {
         durationSec: Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000)),
         logs: finalLogs,
       });
+      clearActiveFreeTalk();
       return;
     }
 
@@ -454,6 +543,7 @@ export default function TrainingFreeTalkPage() {
       durationSec: Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000)),
       logs: finalLogs,
     });
+    clearActiveFreeTalk();
   }
 
   const canSend =
@@ -641,7 +731,13 @@ export default function TrainingFreeTalkPage() {
   };
 
   function onGoTop() {
+    clearActiveFreeTalk();
     router.push("/");
+  }
+
+  function onBackToTraining() {
+    clearActiveFreeTalk();
+    router.push("/training");
   }
 
   return (
@@ -892,7 +988,7 @@ export default function TrainingFreeTalkPage() {
           <div style={{ display: "flex", gap: 10 }}>
             <button
               type="button"
-              onClick={() => router.push("/training")}
+              onClick={onBackToTraining}
               style={{
                 ...sendBtn,
                 flex: 1,
