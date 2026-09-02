@@ -9,6 +9,7 @@ import { LS_KEYS, type PendingInterview } from "@/app/types";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import { createRecordingSessionId, saveLocalRecording } from "@/app/lib/localRecordings";
+import { ACTIVE_REVIEW_ITEM_KEY } from "@/app/lib/reviewList";
 
 // ====== 🎤 helpers ======
 function pickBestMimeType() {
@@ -41,6 +42,8 @@ export default function SpeechClient() {
   const sp = useSearchParams();
 
   const topicFromQuery = (sp.get("topic") ?? "").toString().trim();
+  const isSameTopicRetry = sp.get("retry") === "1";
+  const reviewMode = sp.get("review") === "speech" ? "speech" : "full";
 
   const [topic, setTopic] = useState<string>(topicFromQuery);
   const [speech, setSpeech] = useState<string>("");
@@ -55,7 +58,10 @@ export default function SpeechClient() {
   const [phase, setPhase] = useState<"speech" | "handoff">("speech");
 
   const examinerLine = "You have two minutes. Please begin.";
-  const qaIntroLine = "Thank you. Now I'd like to ask you a few questions about the topic.";
+  const qaIntroLine =
+    reviewMode === "speech"
+      ? "Thank you. This concludes your speech practice."
+      : "Thank you. Now I'd like to ask you a few questions about the topic.";
 
   // ====== ⏱ timer ======
   const LIMIT_SEC = 120;
@@ -466,6 +472,19 @@ export default function SpeechClient() {
       speech: s,
       startedAt: new Date().toISOString(),
       audioSessionId: getAudioSessionId(),
+      retryPreviousFinishedAt: isSameTopicRetry
+        ? (() => {
+            try {
+              const raw = localStorage.getItem("eiken_mvp_previousAttempt");
+              const previous = raw ? JSON.parse(raw) : null;
+              return typeof previous?.finishedAt === "string" ? previous.finishedAt : undefined;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined,
+      reviewMode,
+      reviewItemId: sessionStorage.getItem(ACTIVE_REVIEW_ITEM_KEY) || undefined,
     };
 
     try {
@@ -565,7 +584,7 @@ export default function SpeechClient() {
               )}
               <div style={{ height: 10 }} />
               <button type="button" onClick={goToQA} style={sendBtn}>
-                Yes → Q&Aへ
+                {reviewMode === "speech" ? "結果を見る" : "Yes → Q&Aへ"}
               </button>
             </div>
           )}

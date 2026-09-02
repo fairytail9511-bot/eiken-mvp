@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import type { TopicResponse } from "@/app/types";
+import { getTrainingTheme } from "@/app/lib/trainingThemes";
 const MODEL_TOPIC = "gpt-5.4-mini";
 
 export const runtime = "nodejs";
@@ -116,6 +117,7 @@ export async function POST(req: Request) {
         : 5;
 
     const difficultyRaw = String(body?.difficulty ?? "real").trim();
+    const theme = getTrainingTheme(body?.themeId);
     const difficulty: "easy" | "real" | "hard" =
       difficultyRaw === "easy" || difficultyRaw === "hard" || difficultyRaw === "real"
         ? (difficultyRaw as any)
@@ -141,11 +143,13 @@ export async function POST(req: Request) {
       "- One sentence per question.\n" +
       "- Each question MUST end with a question mark '?'.\n" +
       "- No numbering, no labels, no quotes, no commentary.\n" +
+      (theme.id === "random" ? "" : `- Keep every question within this theme: ${theme.prompt}.\n`) +
       "\n" +
       diffLine;
 
     const user =
       `Generate ${count} EIKEN Grade 1 TOPIC questions.\n` +
+      (theme.id === "random" ? "" : `Selected theme: ${theme.label} (${theme.prompt}).\n`) +
       "They must be Yes/No or Agree/Disagree questions.\n" +
       "Return ONLY the JSON object with the questions array.";
 

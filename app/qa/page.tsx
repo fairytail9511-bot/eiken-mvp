@@ -185,8 +185,10 @@ export default function QAPage() {
 
   const [loadingInit, setLoadingInit] = useState(true);
   const [loadingScore, setLoadingScore] = useState(false);
+  const [paywallBlocked, setPaywallBlocked] = useState(false);
 
   const isDone = useMemo(() => qIndex >= 4, [qIndex]);
+  const isSpeechOnlyReview = pending?.reviewMode === "speech";
 
   const qaAnalysisRef = useRef<QAAnalysisItem[]>([]);
 
@@ -463,6 +465,51 @@ export default function QAPage() {
         if (!p?.topic || !p?.speech) throw new Error("面接データが壊れています。Topicからやり直してください。");
         setPending(p);
 
+        if (p.reviewMode === "speech") {
+          const previousRaw = localStorage.getItem("eiken_mvp_previousAttempt");
+          const previous = previousRaw ? JSON.parse(previousRaw) : null;
+          const previousQa = Array.isArray(previous?.qaAnalysis)
+            ? (previous.qaAnalysis as QAAnalysisItem[])
+            : [];
+
+          if (previousQa.length === 0) {
+            throw new Error("Speechのみの復習に必要な前回のQ&A記録がありません。");
+          }
+
+          const orderedQa = [...previousQa].sort((a, b) => a.questionIndex - b.questionIndex);
+          qaAnalysisRef.current = orderedQa.map((item) => ({ ...item }));
+          setQuestions(orderedQa.map((item) => item.questionText));
+          setMsgs([
+            ...orderedQa.flatMap((item) => [
+              { role: "examiner" as const, text: item.questionText },
+              { role: "user" as const, text: item.answerText },
+            ]),
+            { role: "examiner", text: "Thank you very much. This concludes the interview." },
+          ]);
+          setQIndex(4);
+          return;
+        }
+
+        if (p.reviewMode === "qa" && p.qaQuestionMode === "same") {
+          const previousRaw = localStorage.getItem("eiken_mvp_previousAttempt");
+          const previous = previousRaw ? JSON.parse(previousRaw) : null;
+          const previousQa = Array.isArray(previous?.qaAnalysis)
+            ? (previous.qaAnalysis as QAAnalysisItem[])
+            : [];
+          const orderedQa = [...previousQa].sort((a, b) => a.questionIndex - b.questionIndex);
+          const reusedQuestions = orderedQa.map((item) => item.questionText.trim()).filter(Boolean);
+
+          if (reusedQuestions.length !== 4) {
+            throw new Error("同じ4問での復習に必要な前回の質問記録がありません。");
+          }
+
+          setQuestions(reusedQuestions);
+          setMsgs([{ role: "examiner", text: reusedQuestions[0] }]);
+          setQIndex(0);
+          void speakQueue([reusedQuestions[0]]);
+          return;
+        }
+
         const res = await fetch("/api/qa", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -564,6 +611,7 @@ export default function QAPage() {
   ===================== */
   async function goToScore() {
     setError("");
+    setPaywallBlocked(false);
     if (!pending) {
       setError("面接データがありません。");
       return;
@@ -608,6 +656,7 @@ export default function QAPage() {
       });
 
       const data = (await res.json()) as ScoreAccessResponse;
+      if (res.status === 402 || data?.paywall) setPaywallBlocked(true);
       if (!res.ok) throw new Error(data?.message ?? data?.error ?? "Failed to score");
       persistScoreAccess(data);
 
@@ -630,7 +679,7 @@ export default function QAPage() {
 
       if (!ok) throw new Error("Invalid score response schema from /api/score");
 
-      const scoreResult: ScoreResult = {
+      let scoreResult: ScoreResult = {
         total: data.total as number,
         breakdown: data.breakdown as ScoreResult["breakdown"],
         section_feedback: data.section_feedback as ScoreResult["section_feedback"],
@@ -644,6 +693,43 @@ export default function QAPage() {
         three_blocks: data.three_blocks as ScoreResult["three_blocks"],
       };
 
+      if (pending.reviewMode === "qa" || pending.reviewMode === "speech") {
+        try {
+          const previousRaw = localStorage.getItem("eiken_mvp_previousAttempt");
+          const previous = previousRaw ? JSON.parse(previousRaw) : null;
+          const previousScore = previous?.scoreResult as ScoreResult | undefined;
+          const fixedSection = pending.reviewMode === "qa" ? "short_speech" : "interaction";
+
+          if (
+            previous?.finishedAt === pending.retryPreviousFinishedAt &&
+            previousScore?.breakdown &&
+            typeof previousScore.breakdown[fixedSection] === "number"
+          ) {
+            const breakdown = {
+              ...scoreResult.breakdown,
+              [fixedSection]: previousScore.breakdown[fixedSection],
+            };
+            scoreResult = {
+              ...scoreResult,
+              total:
+                breakdown.short_speech +
+                breakdown.interaction +
+                breakdown.grammar_vocab +
+                breakdown.pronunciation_fluency,
+              breakdown,
+              section_feedback: {
+                ...scoreResult.section_feedback,
+                [fixedSection]: previousScore.section_feedback?.[fixedSection] ?? scoreResult.section_feedback[fixedSection],
+              },
+              three_blocks: {
+                ...(scoreResult.three_blocks ?? {}),
+                [fixedSection]: previousScore.three_blocks?.[fixedSection] ?? scoreResult.three_blocks?.[fixedSection],
+              },
+            };
+          }
+        } catch {}
+      }
+
       const smalltalk = (() => {
         try {
           const raw = localStorage.getItem(LS_KEYS.LAST_SESSION);
@@ -656,21 +742,24 @@ export default function QAPage() {
         }
       })();
 
-      const enrichedQaAnalysis: QAAnalysisItem[] = await Promise.all(
-        qaAnalysisRef.current.map(async (item) => {
-          try {
-            const example = await fetchImprovementExample({
-              topic: pending.topic,
-              speech: pending.speech,
-              question: item.questionText,
-              answer: item.answerText,
-            });
-            return { ...item, improvementExample: example };
-          } catch {
-            return { ...item, improvementExample: item.improvementExample ?? "" };
-          }
-        })
-      );
+      const enrichedQaAnalysis: QAAnalysisItem[] =
+        pending.reviewMode === "speech"
+          ? qaAnalysisRef.current.map((item) => ({ ...item }))
+          : await Promise.all(
+              qaAnalysisRef.current.map(async (item) => {
+                try {
+                  const example = await fetchImprovementExample({
+                    topic: pending.topic,
+                    speech: pending.speech,
+                    question: item.questionText,
+                    answer: item.answerText,
+                  });
+                  return { ...item, improvementExample: example };
+                } catch {
+                  return { ...item, improvementExample: item.improvementExample ?? "" };
+                }
+              })
+            );
 
       localStorage.setItem(
         LS_KEYS.LAST_SESSION,
@@ -678,6 +767,10 @@ export default function QAPage() {
           topic: pending.topic,
           finishedAt: new Date().toISOString(),
           audioSessionId: pending.audioSessionId,
+          retryPreviousFinishedAt: pending.retryPreviousFinishedAt,
+          reviewMode: pending.reviewMode,
+          qaQuestionMode: pending.qaQuestionMode,
+          reviewItemId: pending.reviewItemId,
           difficulty,
           accessMode: data.accessMode ?? (getIsPro() ? "pro" : "free"),
           usedThisMonth: data.usedThisMonth,
@@ -726,7 +819,9 @@ export default function QAPage() {
     : isTranscribing
     ? "文字起こし中…"
     : isDone
-    ? "採点へ進んでください"
+    ? isSpeechOnlyReview
+      ? "Speech練習が完了しました"
+      : "採点へ進んでください"
     : "待機中";
 
   const containerStyle: React.CSSProperties = {
@@ -773,7 +868,7 @@ export default function QAPage() {
     ...cardGold,
     flex: 1,
     overflow: "hidden",
-    display: showTranscript ? "flex" : "none",
+    display: showTranscript && !isSpeechOnlyReview ? "flex" : "none",
     flexDirection: "column",
   };
 
@@ -886,6 +981,11 @@ export default function QAPage() {
     router.push("/");
   }
 
+  function goToPlans() {
+    localStorage.setItem("eiken_mvp_show_plans", "1");
+    router.push("/");
+  }
+
   return (
     <main style={containerStyle}>
       <div style={phoneStyle}>
@@ -958,10 +1058,22 @@ export default function QAPage() {
             </div>
           )}
 
+          {paywallBlocked ? (
+            <button type="button" onClick={goToPlans} style={{ ...sendBtn, background: "linear-gradient(180deg, #d97706, #78350f)" }}>
+              有料プランを見る
+            </button>
+          ) : null}
+
           <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 12 }}>
             {statusText}
             {qIndex >= 0 && qIndex <= 3 ? `（Q${qIndex + 1}/4）` : isDone ? "（1~2分程度かかります）" : ""}
           </div>
+
+          {isSpeechOnlyReview ? (
+            <div style={{ fontSize: 12, lineHeight: 1.6, color: "rgba(255,255,255,0.75)" }}>
+              Q&amp;Aは前回の回答を引き継ぎ、今回のSpeechと合わせて結果を作成します。
+            </div>
+          ) : null}
 
           {!isDone ? (
             <>
@@ -1018,7 +1130,7 @@ export default function QAPage() {
                 cursor: loadingScore ? "not-allowed" : "pointer",
               }}
             >
-              {loadingScore ? "採点中..." : "採点へ"}
+              {loadingScore ? "採点中..." : isSpeechOnlyReview ? "結果を見る" : "採点へ"}
             </button>
           )}
 

@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { ACTIVE_REVIEW_ITEM_KEY, loadReviewList } from "@/app/lib/reviewList";
 
 const LS_KEY_INTERVIEW_START = "eiken_mvp_interview_start";
 const LS_KEY_AUDIO_UNLOCKED = "eiken_mvp_audio_unlocked";
@@ -81,6 +82,7 @@ export default function HomePage() {
   const [isPro, setIsPro] = useState(false);
   const [trialUsed, setTrialUsed] = useState(false);
   const [freeCount, setFreeCount] = useState(0);
+  const [dueReviewCount, setDueReviewCount] = useState(0);
 
   const [showPlans, setShowPlans] = useState(false);
   const [purchaseBusy, setPurchaseBusy] = useState(false);
@@ -110,8 +112,23 @@ export default function HomePage() {
     }
   }, []);
 
+  const refreshReviewCount = useCallback(() => {
+    try {
+      const now = Date.now();
+      const count = loadReviewList().filter(
+        (item) =>
+          item.stage < 3 &&
+          (!item.nextReviewAt || new Date(item.nextReviewAt).getTime() <= now)
+      ).length;
+      setDueReviewCount(count);
+    } catch {
+      setDueReviewCount(0);
+    }
+  }, []);
+
   useEffect(() => {
     refreshAccessState();
+    refreshReviewCount();
 
     const openPlansIfRequested = () => {
       try {
@@ -126,9 +143,15 @@ export default function HomePage() {
       }
     } catch {}
 
-    const onFocus = () => refreshAccessState();
+    const onFocus = () => {
+      refreshAccessState();
+      refreshReviewCount();
+    };
     const onVisible = () => {
-      if (document.visibilityState === "visible") refreshAccessState();
+      if (document.visibilityState === "visible") {
+        refreshAccessState();
+        refreshReviewCount();
+      }
     };
 
     window.addEventListener("focus", onFocus);
@@ -140,7 +163,7 @@ export default function HomePage() {
       window.removeEventListener(OPEN_PLANS_EVENT, openPlansIfRequested);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refreshAccessState]);
+  }, [refreshAccessState, refreshReviewCount]);
 
   function unlockAudioOnce() {
     try {
@@ -176,6 +199,9 @@ export default function HomePage() {
   }
 
   function goSmalltalk() {
+    try {
+      sessionStorage.removeItem(ACTIVE_REVIEW_ITEM_KEY);
+    } catch {}
     try {
       localStorage.removeItem("eiken_mvp_score_locked");
     } catch {}
@@ -421,6 +447,31 @@ export default function HomePage() {
 
               <Link href="/records" style={subBtn}>
                 記録
+              </Link>
+
+              <Link
+                href="/review"
+                style={{ ...subBtn, display: "flex", alignItems: "center", justifyContent: "center", gap: 9 }}
+              >
+                <span>復習リスト</span>
+                <span
+                  style={{
+                    minWidth: 25,
+                    height: 25,
+                    padding: "0 7px",
+                    borderRadius: 999,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    background: dueReviewCount > 0 ? "#dc2626" : "#e2e8f0",
+                    color: dueReviewCount > 0 ? "#fff" : "#64748b",
+                    fontSize: 12,
+                    fontWeight: 900,
+                  }}
+                  aria-label={`今日の復習 ${dueReviewCount}件`}
+                >
+                  {dueReviewCount}
+                </span>
               </Link>
 
               <button

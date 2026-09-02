@@ -5,6 +5,13 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
+import { clearLocalRecordingSession, createRecordingSessionId } from "@/app/lib/localRecordings";
+import {
+  ACTIVE_REVIEW_ITEM_KEY,
+  addReviewItem,
+  completeReviewItem,
+  loadReviewList,
+} from "@/app/lib/reviewList";
 
 /* =====================
    Types
@@ -52,6 +59,10 @@ type SessionData = {
   topic?: string;
   finishedAt?: string;
   audioSessionId?: string;
+  retryPreviousFinishedAt?: string;
+  reviewMode?: "full" | "speech" | "qa";
+  qaQuestionMode?: "same" | "new";
+  reviewItemId?: string;
   difficulty?: "easy" | "real" | "hard" | string;
   durationSec?: number;
   transcript?: string;
@@ -90,11 +101,22 @@ type SavedRecord = {
   session: SessionData;
 };
 
+type TopicAttemptHistoryEntry = {
+  id: string;
+  topicKey: string;
+  session: SessionData;
+};
+
 /* =====================
    localStorage keys
 ===================== */
 const LS_KEYS = {
   LAST_SESSION: "eiken_mvp_lastSession",
+  PREVIOUS_ATTEMPT: "eiken_mvp_previousAttempt",
+  TOPIC_ATTEMPT_HISTORY: "eiken_mvp_topicAttemptHistory",
+  SELECTED_TOPIC: "eiken_mvp_selectedTopic",
+  PENDING_INTERVIEW: "eiken_mvp_pendingInterview",
+  SCORE_LOCKED: "eiken_mvp_score_locked",
   RECENT_RECORDS: "eiken_mvp_recentRecords",
   INTERVIEW_START: "eiken_mvp_interview_start",
   FREE_RECENT_RECORDS: "speaking_recent_records_free",
@@ -109,6 +131,8 @@ const SESSION_KEYS = {
 const REFRESH_LIMIT_FREE = 3;
 const RECENT_LIMIT_PRO = 20;
 const RECENT_LIMIT_FREE = 5;
+const TOPIC_HISTORY_LIMIT = 5;
+const TOPIC_HISTORY_GLOBAL_LIMIT = 50;
 
 /* =====================
    Helpers
@@ -155,6 +179,32 @@ function formatDuration(ms: number) {
   return `${m}分${String(s).padStart(2, "0")}秒`;
 }
 
+function formatAttemptDate(value: string | undefined) {
+  if (!value) return "日時不明";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "日時不明";
+  return date.toLocaleString("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getSessionScores(session: SessionData) {
+  const breakdown = session.scoreResult?.breakdown ?? {};
+  const scores = {
+    shortSpeech: asInt(breakdown.short_speech),
+    interaction: asInt(breakdown.interaction),
+    grammarVocab: asInt(breakdown.grammar_vocab),
+    pronunciation: asInt(breakdown.pronunciation_fluency),
+  };
+  return {
+    ...scores,
+    total: scores.shortSpeech + scores.interaction + scores.grammarVocab + scores.pronunciation,
+  };
+}
+
 function getIsPro() {
   try {
     return localStorage.getItem(LS_KEYS.IS_PRO) === "1";
@@ -172,6 +222,42 @@ function normalizeSpeechText(raw: string) {
     .replace(/[ \u00A0]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function normalizeTopicKey(topic: unknown) {
+  return String(topic ?? "").trim().toLocaleLowerCase();
+}
+
+function topicHistoryEntryId(session: SessionData) {
+  return [asString(session.finishedAt), asString(session.audioSessionId), normalizeTopicKey(session.topic)].join("__");
+}
+
+function loadTopicAttemptHistory() {
+  return safeJsonParseArr<TopicAttemptHistoryEntry>(localStorage.getItem(LS_KEYS.TOPIC_ATTEMPT_HISTORY));
+}
+
+function upsertTopicAttemptHistory(session: SessionData) {
+  const topicKey = normalizeTopicKey(session.topic);
+  if (!topicKey || !session.finishedAt) return loadTopicAttemptHistory();
+
+  const entry: TopicAttemptHistoryEntry = {
+    id: topicHistoryEntryId(session),
+    topicKey,
+    session,
+  };
+  const withoutDuplicate = loadTopicAttemptHistory().filter((item) => item.id !== entry.id);
+  const perTopicCounts = new Map<string, number>();
+  const next = [entry, ...withoutDuplicate]
+    .filter((item) => {
+      const count = perTopicCounts.get(item.topicKey) ?? 0;
+      if (count >= TOPIC_HISTORY_LIMIT) return false;
+      perTopicCounts.set(item.topicKey, count + 1);
+      return true;
+    })
+    .slice(0, TOPIC_HISTORY_GLOBAL_LIMIT);
+
+  localStorage.setItem(LS_KEYS.TOPIC_ATTEMPT_HISTORY, JSON.stringify(next));
+  return next;
 }
 
 function isSpeechAIFeedback(x: any): x is SpeechAIFeedback {
@@ -599,8 +685,11 @@ export default function ResultClient() {
   const router = useRouter();
   const sp = useSearchParams();
   const fromRecords = sp.get("from") === "records";
+  const fromReview = sp.get("review") === "1";
 
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
+  const [previousAttempt, setPreviousAttempt] = useState<SessionData | null>(null);
+  const [topicAttemptHistory, setTopicAttemptHistory] = useState<TopicAttemptHistoryEntry[]>([]);
   const [error, setError] = useState("");
   const [elapsed, setElapsed] = useState("");
 
@@ -620,6 +709,7 @@ export default function ResultClient() {
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveDone, setSaveDone] = useState(false);
   const [freeAutoSaved, setFreeAutoSaved] = useState(false);
+  const [reviewListAdded, setReviewListAdded] = useState(false);
 
   const [sectionsRefreshUsed, setSectionsRefreshUsed] = useState(0);
   const [commentRefreshUsed, setCommentRefreshUsed] = useState(0);
@@ -691,6 +781,38 @@ export default function ResultClient() {
 
       setIsFirstTrialAccess(currentEntryIsFirstTrial || nextSession.accessMode === "trial");
       setSessionData(nextSession);
+
+      const currentTopicKeyForReview = normalizeTopicKey(nextSession.topic);
+      if (!fromRecords && nextSession.reviewItemId) {
+        completeReviewItem(nextSession.reviewItemId, nextSession);
+        sessionStorage.removeItem(ACTIVE_REVIEW_ITEM_KEY);
+      }
+      setReviewListAdded(
+        loadReviewList().some((item) => item.topicKey === currentTopicKeyForReview && item.stage < 3)
+      );
+
+      const allTopicHistory = fromRecords
+        ? loadTopicAttemptHistory()
+        : upsertTopicAttemptHistory(nextSession);
+      const currentTopicKey = normalizeTopicKey(nextSession.topic);
+      setTopicAttemptHistory(
+        allTopicHistory
+          .filter((item) => item.topicKey === currentTopicKey)
+          .sort(
+            (a, b) =>
+              new Date(a.session.finishedAt ?? 0).getTime() -
+              new Date(b.session.finishedAt ?? 0).getTime()
+          )
+      );
+
+      const previous = safeJsonParse<SessionData>(localStorage.getItem(LS_KEYS.PREVIOUS_ATTEMPT));
+      const retryPreviousFinishedAt = asString(nextSession.retryPreviousFinishedAt).trim();
+      const isMatchingRetry =
+        retryPreviousFinishedAt.length > 0 &&
+        asString(previous?.finishedAt).trim() === retryPreviousFinishedAt &&
+        asString(previous?.topic).trim() === asString(nextSession.topic).trim();
+      setPreviousAttempt(isMatchingRetry ? previous : null);
+
       setSectionsRefreshUsed(getRefreshUsed(nextSession, "sections"));
       setCommentRefreshUsed(getRefreshUsed(nextSession, "comment"));
     } catch {
@@ -730,7 +852,41 @@ export default function ResultClient() {
   const smalltalk = sessionData?.logs?.smalltalk ?? [];
   const speechRaw = sessionData?.logs?.speech ?? "";
   const speechText = useMemo(() => normalizeSpeechText(speechRaw), [speechRaw]);
+  const previousSpeechText = useMemo(
+    () => normalizeSpeechText(previousAttempt?.logs?.speech ?? ""),
+    [previousAttempt?.logs?.speech]
+  );
+  const previousBreakdown = previousAttempt?.scoreResult?.breakdown ?? {};
+  const previousScores = {
+    shortSpeech: asInt(previousBreakdown.short_speech),
+    interaction: asInt(previousBreakdown.interaction),
+    grammarVocab: asInt(previousBreakdown.grammar_vocab),
+    pronunciation: asInt(previousBreakdown.pronunciation_fluency),
+  };
+  const previousTotal =
+    previousScores.shortSpeech +
+    previousScores.interaction +
+    previousScores.grammarVocab +
+    previousScores.pronunciation;
   const qaAnalysis = sessionData?.qaAnalysis ?? [];
+  const qaComparisonItems = useMemo(() => {
+    if (!previousAttempt) return [];
+
+    const previousQa = previousAttempt.qaAnalysis ?? [];
+    const currentQa = sessionData?.qaAnalysis ?? [];
+    const questionIndexes = Array.from(
+      new Set([
+        ...previousQa.map((item) => item.questionIndex),
+        ...currentQa.map((item) => item.questionIndex),
+      ])
+    ).sort((a, b) => a - b);
+
+    return questionIndexes.map((questionIndex) => ({
+      questionIndex,
+      previous: previousQa.find((item) => item.questionIndex === questionIndex) ?? null,
+      current: currentQa.find((item) => item.questionIndex === questionIndex) ?? null,
+    }));
+  }, [previousAttempt, sessionData?.qaAnalysis]);
 
   const sectionsRemaining = premiumAccess ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - sectionsRefreshUsed);
   const commentRemaining = premiumAccess ? Infinity : Math.max(0, REFRESH_LIMIT_FREE - commentRefreshUsed);
@@ -955,6 +1111,111 @@ export default function ResultClient() {
     }
   }
 
+  function retrySameTopic(
+    reviewMode: "full" | "speech" | "qa",
+    qaQuestionMode: "same" | "new" = "new"
+  ) {
+    setError("");
+    if (!sessionData) {
+      setError("再練習する結果データが見つかりません。");
+      return;
+    }
+
+    const topic = asString(sessionData.topic).trim();
+    if (!topic) {
+      setError("再練習するお題が見つかりません。");
+      return;
+    }
+
+    const previousSpeech = normalizeSpeechText(sessionData.logs?.speech ?? "");
+    const reviewItemId = fromReview
+      ? sessionStorage.getItem(ACTIVE_REVIEW_ITEM_KEY) || undefined
+      : undefined;
+    if (reviewMode === "qa" && !previousSpeech) {
+      setError("Q&Aのみの復習に必要な前回のSpeech記録がありません。");
+      return;
+    }
+
+    try {
+      localStorage.setItem(LS_KEYS.PREVIOUS_ATTEMPT, JSON.stringify(sessionData));
+      localStorage.setItem(LS_KEYS.SELECTED_TOPIC, topic);
+      localStorage.removeItem(LS_KEYS.PENDING_INTERVIEW);
+      localStorage.removeItem(LS_KEYS.SCORE_LOCKED);
+      localStorage.setItem(LS_KEYS.INTERVIEW_START, String(Date.now()));
+
+      if (reviewMode === "qa") {
+        localStorage.setItem(
+          LS_KEYS.PENDING_INTERVIEW,
+          JSON.stringify({
+            topic,
+            speech: previousSpeech,
+            startedAt: new Date().toISOString(),
+            audioSessionId: createRecordingSessionId(),
+            retryPreviousFinishedAt: sessionData.finishedAt,
+            reviewMode,
+            qaQuestionMode,
+            reviewItemId,
+          })
+        );
+      }
+      sessionStorage.removeItem("eiken_mvp_from_records");
+    } catch {
+      setError("再練習の準備に失敗しました。");
+      return;
+    }
+
+    if (reviewMode === "qa") {
+      router.push("/qa");
+      return;
+    }
+    router.push(`/speech?topic=${encodeURIComponent(topic)}&retry=1&review=${reviewMode}`);
+  }
+
+  function addCurrentTopicToReviewList() {
+    if (!sessionData?.topic) return;
+    try {
+      addReviewItem(sessionData.topic, sessionData);
+      setReviewListAdded(true);
+    } catch {
+      setError("復習リストへの追加に失敗しました。");
+    }
+  }
+
+  const comparisonRows = previousAttempt
+    ? [
+        { label: "Short Speech", previous: previousScores.shortSpeech, current: bShort },
+        { label: "Interaction", previous: previousScores.interaction, current: bInter },
+        { label: "Grammar & Vocabulary", previous: previousScores.grammarVocab, current: bGV },
+        { label: "Pronunciation", previous: previousScores.pronunciation, current: bPron },
+      ]
+    : [];
+
+  function formatScoreDelta(current: number, previous: number) {
+    const delta = current - previous;
+    if (delta > 0) return `+${delta}`;
+    return String(delta);
+  }
+
+  async function deleteTopicAttempt(entry: TopicAttemptHistoryEntry) {
+    const isCurrentAttempt = sessionData ? entry.id === topicHistoryEntryId(sessionData) : false;
+    if (isCurrentAttempt) return;
+    if (!window.confirm("この挑戦履歴と端末内の録音を削除しますか？")) return;
+
+    try {
+      const next = loadTopicAttemptHistory().filter((item) => item.id !== entry.id);
+      localStorage.setItem(LS_KEYS.TOPIC_ATTEMPT_HISTORY, JSON.stringify(next));
+      if (entry.session.audioSessionId) {
+        await clearLocalRecordingSession(entry.session.audioSessionId);
+      }
+      setTopicAttemptHistory((current) => current.filter((item) => item.id !== entry.id));
+      if (previousAttempt && entry.id === topicHistoryEntryId(previousAttempt)) {
+        setPreviousAttempt(null);
+      }
+    } catch {
+      setError("挑戦履歴の削除に失敗しました。");
+    }
+  }
+
   return (
     <main
       style={{
@@ -1109,6 +1370,321 @@ export default function ResultClient() {
                 </div>
               )}
             </Accordion>
+
+            {previousAttempt ? (
+              <>
+              <Accordion
+                icon={<span>📈</span>}
+                title="スコアの比較"
+                right={
+                  <span style={{ fontWeight: 900, color: total >= previousTotal ? "#15803d" : "#b91c1c", fontSize: 12 }}>
+                    {formatScoreDelta(total, previousTotal)}点
+                  </span>
+                }
+                defaultOpen
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "baseline",
+                    justifyContent: "center",
+                    gap: 10,
+                    padding: "10px 8px 14px",
+                    fontWeight: 900,
+                  }}
+                >
+                  <span style={{ color: "#64748b" }}>前回 {previousTotal}/40</span>
+                  <span aria-hidden>→</span>
+                  <span style={{ color: "#0f172a", fontSize: 20 }}>今回 {total}/40</span>
+                </div>
+
+                <div style={{ display: "grid", gap: 7 }}>
+                  {comparisonRows.map((row) => {
+                    const delta = row.current - row.previous;
+                    return (
+                      <div
+                        key={row.label}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(0, 1fr) auto auto",
+                          alignItems: "center",
+                          gap: 10,
+                          border: "1px solid #e2e8f0",
+                          borderRadius: 10,
+                          padding: "8px 10px",
+                          fontSize: 12,
+                        }}
+                      >
+                        <span style={{ fontWeight: 800 }}>{row.label}</span>
+                        <span style={{ color: "#475569", whiteSpace: "nowrap" }}>
+                          {row.previous} → {row.current}
+                        </span>
+                        <span
+                          style={{
+                            minWidth: 24,
+                            textAlign: "right",
+                            fontWeight: 900,
+                            color: delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#64748b",
+                          }}
+                        >
+                          {formatScoreDelta(row.current, row.previous)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Accordion>
+
+              <Accordion icon={<span>🎤</span>} title="Speechの比較">
+                <div style={{ display: "grid", gap: 10 }}>
+                  {[
+                    { label: "前回", text: previousSpeechText },
+                    { label: "今回", text: speechText },
+                  ].map((item) => (
+                    <div key={item.label} style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 900, color: "#475569", marginBottom: 6 }}>{item.label}</div>
+                      <div style={{ fontSize: 13, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>
+                        {item.text || "（Speechの記録なし）"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 16, fontSize: 13, fontWeight: 900 }}>Speech録音の聴き比べ</div>
+                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                  {previousAttempt.audioSessionId ? (
+                    <LocalRecordingPlayer
+                      sessionId={previousAttempt.audioSessionId}
+                      part="speech"
+                      label="前回の2分間スピーチ"
+                    />
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#64748b" }}>前回の録音は保存されていません。</div>
+                  )}
+                  {sessionData?.audioSessionId ? (
+                    <LocalRecordingPlayer
+                      sessionId={sessionData.audioSessionId}
+                      part="speech"
+                      label="今回の2分間スピーチ"
+                    />
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#64748b" }}>今回の録音は保存されていません。</div>
+                  )}
+                </div>
+              </Accordion>
+
+                {qaComparisonItems.length === 0 ? (
+                  <Accordion icon={<span>💬</span>} title="Q&Aの比較">
+                    <div style={{ fontSize: 12, color: "#64748b" }}>比較できるQ&amp;Aの回答記録がありません。</div>
+                  </Accordion>
+                ) : (
+                  <>
+                    {qaComparisonItems.map(({ questionIndex, previous, current }) => (
+                      <Accordion
+                        key={questionIndex}
+                        icon={<span>Q{questionIndex + 1}</span>}
+                        title={`Q&A ${questionIndex + 1}の比較`}
+                      >
+                        <div style={{ display: "grid", gap: 10 }}>
+                          {[
+                            {
+                              label: "前回",
+                              item: previous,
+                              sessionId: previousAttempt.audioSessionId,
+                            },
+                            {
+                              label: "今回",
+                              item: current,
+                              sessionId: sessionData?.audioSessionId,
+                            },
+                          ].map(({ label, item, sessionId }) => (
+                            <div
+                              key={label}
+                              style={{
+                                border: "1px solid #e2e8f0",
+                                borderRadius: 12,
+                                padding: 10,
+                                background: "#fff",
+                              }}
+                            >
+                              <div style={{ fontSize: 12, fontWeight: 900, color: "#475569" }}>{label}</div>
+                              {item ? (
+                                <>
+                                  <div style={{ marginTop: 7, fontSize: 12, lineHeight: 1.55 }}>
+                                    <b>質問：</b> {item.questionText || "（質問記録なし）"}
+                                  </div>
+                                  <div style={{ marginTop: 7, fontSize: 13, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>
+                                    <b>回答：</b> {item.answerText || "（回答記録なし）"}
+                                  </div>
+                                  <div style={{ marginTop: 7, display: "flex", gap: 8, flexWrap: "wrap", fontSize: 11, color: "#64748b" }}>
+                                    <span>語数：{item.answerLength}</span>
+                                    <span>曖昧表現候補：{item.vagueFlags.length}</span>
+                                  </div>
+                                  <div style={{ marginTop: 7, fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#334155" }}>
+                                    <b>改善例：</b> {item.improvementExample?.trim() || "（改善例なし）"}
+                                  </div>
+                                </>
+                              ) : (
+                                <div style={{ marginTop: 7, fontSize: 12, color: "#64748b" }}>回答記録がありません。</div>
+                              )}
+
+                              <div style={{ marginTop: 9 }}>
+                                {sessionId ? (
+                                  <LocalRecordingPlayer
+                                    sessionId={sessionId}
+                                    part={`qa-${questionIndex}`}
+                                    label={`${label}のQ&A ${questionIndex + 1}`}
+                                  />
+                                ) : (
+                                  <div style={{ fontSize: 11, color: "#64748b" }}>録音は保存されていません。</div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </Accordion>
+                    ))}
+                  </>
+                )}
+              </>
+            ) : null}
+
+            {topicAttemptHistory.length > 0 ? (
+              <Accordion
+                icon={<span>🗂️</span>}
+                title="同じお題の挑戦履歴"
+                right={<span style={{ fontSize: 12, fontWeight: 900 }}>{topicAttemptHistory.length}回</span>}
+              >
+                <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6 }}>
+                  この端末に保存された直近{TOPIC_HISTORY_LIMIT}回を、古い順に表示しています。
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: `repeat(${topicAttemptHistory.length}, minmax(0, 1fr))`,
+                    alignItems: "end",
+                    gap: 8,
+                    height: 130,
+                    marginTop: 12,
+                    padding: "10px 8px 6px",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 12,
+                    background: "#f8fafc",
+                  }}
+                  aria-label="総合スコアの推移"
+                >
+                  {topicAttemptHistory.map((entry, index) => {
+                    const score = getSessionScores(entry.session).total;
+                    return (
+                      <div key={entry.id} style={{ display: "flex", height: "100%", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 900 }}>{score}</div>
+                        <div
+                          style={{
+                            width: "min(34px, 80%)",
+                            height: `${Math.max(5, (score / 40) * 76)}px`,
+                            borderRadius: "7px 7px 3px 3px",
+                            background: "linear-gradient(180deg, #3b82f6, #1e3a8a)",
+                          }}
+                          title={`${score}/40`}
+                        />
+                        <div style={{ fontSize: 10, color: "#64748b" }}>{index + 1}回目</div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+                  {[...topicAttemptHistory].reverse().map((entry) => {
+                    const attempt = entry.session;
+                    const scores = getSessionScores(attempt);
+                    const isCurrentAttempt = sessionData ? entry.id === topicHistoryEntryId(sessionData) : false;
+                    const modeLabel =
+                      attempt.reviewMode === "speech"
+                        ? "Speechのみ"
+                        : attempt.reviewMode === "qa"
+                        ? attempt.qaQuestionMode === "same"
+                          ? "Q&A・同じ4問"
+                          : "Q&A・新しい4問"
+                        : attempt.reviewMode === "full"
+                        ? "Speech＋Q&A"
+                        : "通常面接";
+
+                    return (
+                      <Accordion
+                        key={entry.id}
+                        icon={<span>✓</span>}
+                        title={formatAttemptDate(attempt.finishedAt)}
+                        right={<span style={{ fontSize: 12, fontWeight: 900 }}>{scores.total}/40</span>}
+                      >
+                        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 9 }}>{modeLabel}</div>
+                        <div style={{ display: "grid", gap: 6, fontSize: 12 }}>
+                          {[
+                            ["Short Speech", scores.shortSpeech],
+                            ["Interaction", scores.interaction],
+                            ["Grammar & Vocabulary", scores.grammarVocab],
+                            ["Pronunciation", scores.pronunciation],
+                          ].map(([label, score]) => (
+                            <div key={String(label)} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                              <span>{label}</span>
+                              <b>{score}/10</b>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div style={{ marginTop: 12, fontSize: 12, fontWeight: 900 }}>Speech</div>
+                        <div style={{ marginTop: 5, fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                          {normalizeSpeechText(attempt.logs?.speech ?? "") || "（Speech記録なし）"}
+                        </div>
+
+                        {(attempt.qaAnalysis ?? []).length > 0 ? (
+                          <div style={{ display: "grid", gap: 7, marginTop: 12 }}>
+                            {(attempt.qaAnalysis ?? []).map((item) => (
+                              <div key={item.questionIndex} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, fontSize: 12, lineHeight: 1.55 }}>
+                                <div><b>Q{item.questionIndex + 1}:</b> {item.questionText}</div>
+                                <div style={{ marginTop: 4 }}><b>回答:</b> {item.answerText}</div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {attempt.audioSessionId ? (
+                          <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                            <LocalRecordingPlayer sessionId={attempt.audioSessionId} part="speech" label="Speech録音" />
+                            {(attempt.qaAnalysis ?? []).map((item) => (
+                              <LocalRecordingPlayer
+                                key={item.questionIndex}
+                                sessionId={attempt.audioSessionId!}
+                                part={`qa-${item.questionIndex}`}
+                                label={`Q&A ${item.questionIndex + 1} 録音`}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ marginTop: 9, fontSize: 11, color: "#64748b" }}>録音は保存されていません。</div>
+                        )}
+
+                        {!isCurrentAttempt ? (
+                          <button
+                            type="button"
+                            onClick={() => void deleteTopicAttempt(entry)}
+                            style={{
+                              ...pillBtn,
+                              marginTop: 12,
+                              padding: "7px 11px",
+                              color: "#b91c1c",
+                              borderColor: "#fecaca",
+                            }}
+                          >
+                            この履歴と録音を削除
+                          </button>
+                        ) : null}
+                      </Accordion>
+                    );
+                  })}
+                </div>
+              </Accordion>
+            ) : null}
 
             <Accordion icon={<span>🎙️</span>} title="自分の録音音声">
               {!sessionData?.audioSessionId ? (
@@ -1349,7 +1925,116 @@ export default function ResultClient() {
         </div>
 
         <div style={{ flex: "none", paddingTop: 6, paddingBottom: 10 }}>
+          <div style={{ textAlign: "center", color: "#fff", fontSize: 12, fontWeight: 800, marginBottom: 7 }}>
+            同じお題の復習範囲を選択
+          </div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => retrySameTopic("full")}
+              disabled={!sessionData}
+              style={{
+                ...pillBtn,
+                padding: "12px 18px",
+                fontSize: 14,
+                borderColor: goldBorderStrong,
+                background: "linear-gradient(180deg, rgba(30,58,138,0.96), rgba(15,23,42,0.94))",
+                color: "#fff",
+                boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
+                opacity: sessionData ? 1 : 0.6,
+              }}
+            >
+              Speech＋Q&amp;A
+            </button>
+
+            <button
+              type="button"
+              onClick={() => retrySameTopic("speech")}
+              disabled={!sessionData || qaAnalysis.length === 0}
+              style={{
+                ...pillBtn,
+                padding: "12px 18px",
+                fontSize: 14,
+                borderColor: goldBorderStrong,
+                background: "linear-gradient(180deg, rgba(30,58,138,0.96), rgba(15,23,42,0.94))",
+                color: "#fff",
+                boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
+                opacity: sessionData && qaAnalysis.length > 0 ? 1 : 0.6,
+              }}
+              title={qaAnalysis.length === 0 ? "前回のQ&A記録がないため選択できません" : "Speechのみ再練習"}
+            >
+              Speechのみ
+            </button>
+
+            <button
+              type="button"
+              onClick={() => retrySameTopic("qa", "same")}
+              disabled={!sessionData || !speechText || qaAnalysis.length !== 4}
+              style={{
+                ...pillBtn,
+                padding: "12px 18px",
+                fontSize: 14,
+                borderColor: goldBorderStrong,
+                background: "linear-gradient(180deg, rgba(30,58,138,0.96), rgba(15,23,42,0.94))",
+                color: "#fff",
+                boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
+                opacity: sessionData && speechText && qaAnalysis.length === 4 ? 1 : 0.6,
+              }}
+              title={
+                !speechText || qaAnalysis.length !== 4
+                  ? "前回のSpeech・4問の記録がないため選択できません"
+                  : "前回と同じ4問でQ&Aを再練習"
+              }
+            >
+              Q&amp;A：同じ4問
+            </button>
+
+            <button
+              type="button"
+              onClick={() => retrySameTopic("qa", "new")}
+              disabled={!sessionData || !speechText}
+              style={{
+                ...pillBtn,
+                padding: "12px 18px",
+                fontSize: 14,
+                borderColor: goldBorderStrong,
+                background: "linear-gradient(180deg, rgba(30,58,138,0.96), rgba(15,23,42,0.94))",
+                color: "#fff",
+                boxShadow: "0 10px 24px rgba(0,0,0,0.18)",
+                opacity: sessionData && speechText ? 1 : 0.6,
+              }}
+              title={!speechText ? "前回のSpeech記録がないため選択できません" : "新しい4問でQ&Aを再練習"}
+            >
+              Q&amp;A：新しい4問
+            </button>
+
+            <button
+              type="button"
+              onClick={addCurrentTopicToReviewList}
+              disabled={!sessionData || reviewListAdded}
+              style={{
+                ...pillBtn,
+                padding: "12px 18px",
+                fontSize: 14,
+                borderColor: goldBorderStrong,
+                opacity: !sessionData || reviewListAdded ? 0.65 : 1,
+              }}
+            >
+              {reviewListAdded ? "復習リストに登録済み" : "復習リストに追加"}
+            </button>
+
+            <Link
+              href="/review"
+              style={{
+                ...pillBtn,
+                padding: "12px 18px",
+                fontSize: 14,
+                borderColor: goldBorderStrong,
+              }}
+            >
+              復習リストを見る
+            </Link>
+
             <Link
               href="/"
               style={{

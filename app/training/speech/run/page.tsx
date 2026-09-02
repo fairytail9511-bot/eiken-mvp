@@ -592,6 +592,11 @@ const score = buildSpeechScore(s, blocks, feedback);
     router.push("/");
   }
 
+  function goToPlans() {
+    localStorage.setItem("eiken_mvp_show_plans", "1");
+    router.push("/");
+  }
+
   const canSubmit = trainingAccessGranted && !accessBlocked && !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
 
   const gold = "rgba(234, 179, 8, 0.60)";
@@ -871,6 +876,12 @@ const score = buildSpeechScore(s, blocks, feedback);
               {error}
             </div>
           )}
+
+          {accessBlocked ? (
+            <button type="button" onClick={goToPlans} style={{ ...sendBtn, background: "linear-gradient(180deg, #d97706, #78350f)" }}>
+              有料プランを見る
+            </button>
+          ) : null}
 
           {result && (
             <>

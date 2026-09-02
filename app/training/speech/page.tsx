@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import TrainingThemeSelector, { type TrainingThemeSelection } from "@/app/components/TrainingThemeSelector";
+import { getTrainingTheme } from "@/app/lib/trainingThemes";
 
 // ====== training localStorage keys ======
 const TRAINING_KEYS = {
@@ -89,6 +91,7 @@ export default function TrainingSpeechTopicPage() {
   const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
   const [usedFallback, setUsedFallback] = useState(false);
+  const [themeSelection, setThemeSelection] = useState<TrainingThemeSelection | null>(null);
 
   const [topicTexts, setTopicTexts] = useState<string[] | null>(null);
   const [loadingTopics, setLoadingTopics] = useState(false);
@@ -97,9 +100,12 @@ export default function TrainingSpeechTopicPage() {
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [phase, setPhase] = useState<"prep" | "ask">("prep");
 
-  const examinerIntro =
-    "Please select one topic. You have one minute to prepare. After one minute, I will ask which topic you chose.";
-  const examinerAsk = "One minute has passed. Which topic did you choose?";
+  const examinerIntro = themeSelection?.mode === "fixed"
+    ? "Here is your selected topic. You have one minute to prepare."
+    : "Please select one topic. You have one minute to prepare. After one minute, I will ask which topic you chose.";
+  const examinerAsk = themeSelection?.mode === "fixed"
+    ? "One minute has passed. Are you ready to begin?"
+    : "One minute has passed. Which topic did you choose?";
 
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState("");
@@ -197,6 +203,7 @@ export default function TrainingSpeechTopicPage() {
 
   const didFetchTopicsRef = useRef(false);
   useEffect(() => {
+    if (!themeSelection) return;
     if (didFetchTopicsRef.current) return;
     didFetchTopicsRef.current = true;
 
@@ -205,10 +212,16 @@ export default function TrainingSpeechTopicPage() {
       setError("");
 
       try {
+        if (themeSelection.mode === "fixed" && themeSelection.fixedTopic) {
+          setTopicTexts([themeSelection.fixedTopic]);
+          setSelectedIndex(0);
+          setUsedFallback(false);
+          return;
+        }
         const res = await fetch("/api/topic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ count: 5, difficulty }),
+          body: JSON.stringify({ count: 5, difficulty, themeId: themeSelection.themeId }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data?.error ?? "Failed to fetch topics");
@@ -222,7 +235,8 @@ export default function TrainingSpeechTopicPage() {
         setSelectedIndex(0);
         setUsedFallback(false);
       } catch (e: any) {
-        setTopicTexts(FALLBACK_TOPICS);
+        const themedFallback = getTrainingTheme(themeSelection.themeId).fixedTopics;
+        setTopicTexts(themedFallback.length ? themedFallback : FALLBACK_TOPICS);
         setSelectedIndex(0);
         setError(e?.message ?? "Failed to load topics. Using fallback topics.");
         setUsedFallback(true);
@@ -230,7 +244,7 @@ export default function TrainingSpeechTopicPage() {
         setLoadingTopics(false);
       }
     })();
-  }, [difficulty]);
+  }, [difficulty, themeSelection]);
 
   useEffect(() => {
     if (!topicTexts) return;
@@ -493,6 +507,14 @@ export default function TrainingSpeechTopicPage() {
 
   function onGoTop() {
     router.push("/");
+  }
+
+  if (!themeSelection) {
+    return (
+      <main style={{ ...pageBg, alignItems: "center" }}>
+        <TrainingThemeSelector title="Speechトレーニング" onStart={setThemeSelection} />
+      </main>
+    );
   }
 
   return (

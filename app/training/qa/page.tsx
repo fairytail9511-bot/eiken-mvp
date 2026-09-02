@@ -8,6 +8,8 @@ import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
+import TrainingThemeSelector, { type TrainingThemeSelection } from "@/app/components/TrainingThemeSelector";
+import { getTrainingTheme } from "@/app/lib/trainingThemes";
 
 const TRAINING_AUDIO_SESSION = "training-qa-latest";
 import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
@@ -238,6 +240,7 @@ export default function TrainingQAPage() {
   const AVATAR_EXAMINER_OPEN = avatarConfig.openImage;
 
   const [topic, setTopic] = useState("");
+  const [themeSelection, setThemeSelection] = useState<TrainingThemeSelection | null>(null);
   const [questions, setQuestions] = useState<string[]>([]);
   const [qIndex, setQIndex] = useState<number>(-1);
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -499,6 +502,7 @@ export default function TrainingQAPage() {
   }
 
   async function initTrainingQa() {
+    if (!themeSelection) return;
     await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     setLoadingInit(true);
     setError("");
@@ -520,18 +524,14 @@ export default function TrainingQAPage() {
         throw new Error(`無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`);
       }
 
-      let trainingTopic = "";
-      try {
-        const raw = localStorage.getItem("eiken_mvp_training_qa_topic");
-        if (raw) trainingTopic = String(raw).trim();
-      } catch {}
+      let trainingTopic = themeSelection.mode === "fixed" ? String(themeSelection.fixedTopic ?? "").trim() : "";
 
       if (!trainingTopic) {
         try {
           const resTopic = await fetch("/api/topic", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ count: 1, difficulty }),
+            body: JSON.stringify({ count: 1, difficulty, themeId: themeSelection.themeId }),
           });
           const dataTopic = await resTopic.json();
           if (resTopic.ok) {
@@ -541,7 +541,8 @@ export default function TrainingQAPage() {
       }
 
       if (!trainingTopic) {
-        const fallback = fallbackTopicsByDifficulty(difficulty);
+        const themedFallback = getTrainingTheme(themeSelection.themeId).fixedTopics;
+        const fallback = themedFallback.length ? themedFallback : fallbackTopicsByDifficulty(difficulty);
         trainingTopic = fallback[0];
       }
 
@@ -587,10 +588,11 @@ export default function TrainingQAPage() {
   }
 
   useEffect(() => {
+    if (!themeSelection) return;
     if (didInitRef.current) return;
     didInitRef.current = true;
     void initTrainingQa();
-  }, [difficulty]);
+  }, [difficulty, themeSelection]);
 
   function pushMsg(role: Msg["role"], text: string) {
     setMsgs((prev) => [...prev, { role, text }]);
@@ -929,6 +931,19 @@ export default function TrainingQAPage() {
     router.push("/");
   }
 
+  function goToPlans() {
+    localStorage.setItem("eiken_mvp_show_plans", "1");
+    router.push("/");
+  }
+
+  if (!themeSelection) {
+    return (
+      <main style={{ ...containerStyle, alignItems: "center" }}>
+        <TrainingThemeSelector title="Q&Aトレーニング" onStart={setThemeSelection} />
+      </main>
+    );
+  }
+
   return (
     <main style={containerStyle}>
       <div style={phoneStyle}>
@@ -1042,6 +1057,12 @@ export default function TrainingQAPage() {
                   {error}
                 </div>
               )}
+
+              {accessBlocked ? (
+                <button type="button" onClick={goToPlans} style={{ ...sendBtn, background: "linear-gradient(180deg, #d97706, #78350f)" }}>
+                  有料プランを見る
+                </button>
+              ) : null}
 
               <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 12 }}>
                 {statusText}

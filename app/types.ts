@@ -51,6 +51,10 @@ export type PendingInterview = {
   speech: string;
   startedAt?: string;
   audioSessionId?: string;
+  retryPreviousFinishedAt?: string;
+  reviewMode?: "full" | "speech" | "qa";
+  qaQuestionMode?: "same" | "new";
+  reviewItemId?: string;
 };
 
 export type LastSessionLogs = {
@@ -63,6 +67,10 @@ export type LastSession = {
   topic: string;
   finishedAt: string;
   audioSessionId?: string;
+  retryPreviousFinishedAt?: string;
+  reviewMode?: "full" | "speech" | "qa";
+  qaQuestionMode?: "same" | "new";
+  reviewItemId?: string;
   scoreResult: ScoreResult;
   logs: LastSessionLogs;
   transcript: string;
