@@ -97,6 +97,7 @@ async function fetchTtsBlob(text: string, gender: TtsGender, signal?: AbortSigna
 async function playBlobOnce(opts: {
   blob: Blob;
   textForTimeout: string;
+  signal?: AbortSignal;
   onStart?: () => void;
 }) {
   const a = getSharedAudio();
@@ -131,6 +132,7 @@ async function playBlobOnce(opts: {
       a.removeEventListener("error", finish);
       a.removeEventListener("stalled", finish);
       a.removeEventListener("abort", finish);
+      opts.signal?.removeEventListener("abort", finish);
     } catch {}
 
     try {
@@ -161,8 +163,11 @@ async function playBlobOnce(opts: {
   a.addEventListener("error", finish);
   a.addEventListener("stalled", finish);
   a.addEventListener("abort", finish);
+  opts.signal?.addEventListener("abort", finish, { once: true });
+  if (opts.signal?.aborted) finish();
 
   try {
+    if (done) return;
     enforceVol();
     // ✅ src 差し替えは毎回 load() もセットで
     a.src = url;
@@ -201,6 +206,7 @@ async function playBlobOnce(opts: {
 export async function playTtsOnce(args: {
   text: string;
   gender: TtsGender;
+  signal?: AbortSignal;
   onStart?: () => void;
   onEnd?: () => void;
 }): Promise<void> {
@@ -222,9 +228,12 @@ export async function playTtsOnce(args: {
 
   try {
     for (let i = 0; i < chunks.length; i++) {
-      const blob = await fetchTtsBlob(chunks[i], args.gender, ctrl?.signal);
+      if (args.signal?.aborted) return;
+      const blob = await fetchTtsBlob(chunks[i], args.gender, args.signal ?? ctrl?.signal);
+      if (args.signal?.aborted) return;
       await playBlobOnce({
         blob,
+        signal: args.signal,
         textForTimeout: chunks[i],
         onStart: i === 0 ? args.onStart : undefined,
       });

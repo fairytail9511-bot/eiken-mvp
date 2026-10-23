@@ -186,6 +186,7 @@ export default function TrainingFreeTalkPage() {
   }
 
   const speakingRef = useRef(false);
+  const speechAbortRef = useRef<AbortController | null>(null);
 
   async function speakNow(text: string) {
     const t = String(text ?? "").trim();
@@ -193,12 +194,15 @@ export default function TrainingFreeTalkPage() {
     if (speakingRef.current) return;
 
     speakingRef.current = true;
+    const controller = new AbortController();
+    speechAbortRef.current = controller;
     try {
       await playTtsOnce({
         text: t,
+        signal: controller.signal,
         gender: ttsGender,
         onStart: () => {
-          setTimeout(() => startMouthFlap(), 120);
+          startMouthFlap();
         },
         onEnd: stopMouthFlap,
       });
@@ -211,6 +215,7 @@ export default function TrainingFreeTalkPage() {
 
   useEffect(() => {
     return () => {
+      speechAbortRef.current?.abort();
       stopMouthFlap();
       speakingRef.current = false;
     };
@@ -219,7 +224,6 @@ export default function TrainingFreeTalkPage() {
   const lastSpokenRef = useRef("");
   useEffect(() => {
     if (!msgs.length) return;
-    if (!showTranscript) return;
 
     const last = msgs[msgs.length - 1];
     if (last.role !== "examiner") return;
@@ -230,7 +234,7 @@ export default function TrainingFreeTalkPage() {
 
     lastSpokenRef.current = t;
     void speakNow(t);
-  }, [msgs, showTranscript]);
+  }, [msgs]);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -426,7 +430,6 @@ export default function TrainingFreeTalkPage() {
 
       setMsgs([{ role: "examiner", text }]);
       persistenceReadyRef.current = true;
-      await speakNow(text);
     } catch (e: any) {
       setError(e?.message ?? "Free Talkの開始に失敗しました。");
     } finally {
@@ -768,6 +771,10 @@ export default function TrainingFreeTalkPage() {
                 }}
               >
                 会話表示はOFFです。
+                <button type="button" onClick={() => {
+                  const last = [...msgs].reverse().find((message) => message.role === "examiner");
+                  if (last) void speakNow(last.text);
+                }} disabled={loadingInit || !msgs.length}>🔊 最新の返答を再生</button>
                 {"\n"}
                 Micで回答し、そのまま進めてください。
               </div>
