@@ -61,6 +61,7 @@ type PersistedFreeTalk = {
   startedAt: number;
   difficulty: string;
   msgs: Msg[];
+  result?: FreeTalkResult;
 };
 
 function loadActiveFreeTalk(): PersistedFreeTalk | null {
@@ -74,7 +75,7 @@ function loadActiveFreeTalk(): PersistedFreeTalk | null {
       parsed.version !== 1 ||
       !Number.isFinite(savedAt) ||
       !Number.isFinite(startedAt) ||
-      Date.now() - savedAt > ACTIVE_FREETALK_TTL_MS ||
+      (!parsed.result && Date.now() - savedAt > ACTIVE_FREETALK_TTL_MS) ||
       !Array.isArray(parsed.msgs) ||
       parsed.msgs.length === 0
     ) {
@@ -99,6 +100,11 @@ function loadActiveFreeTalk(): PersistedFreeTalk | null {
       startedAt,
       difficulty: String(parsed.difficulty ?? "real"),
       msgs,
+      result: parsed.result &&
+        typeof parsed.result.finishedAt === "string" &&
+        Number.isFinite(parsed.result.durationSec)
+        ? { ...parsed.result, logs: msgs }
+        : undefined,
     };
   } catch {
     return null;
@@ -167,6 +173,8 @@ export default function TrainingFreeTalkPage() {
   const persistenceReadyRef = useRef(false);
   const replyRequestRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<Msg[]>([]);
+  const endedRef = useRef(false);
+  const initializingRef = useRef(false);
   const awaitingReply = msgs[msgs.length - 1]?.role === "user";
 
   // Save the complete turn before publishing it to React, including pending user turns.
@@ -406,12 +414,19 @@ export default function TrainingFreeTalkPage() {
   }
 
   async function initFreeTalk() {
+    if (initializingRef.current) return;
+    initializingRef.current = true;
+    endedRef.current = false;
+    replyRequestRef.current?.abort();
+    replyRequestRef.current = null;
+    speechAbortRef.current?.abort();
     persistenceReadyRef.current = false;
     clearActiveFreeTalk();
     await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     setLoadingInit(true);
     setError("");
     setMsgs([]);
+    messagesRef.current = [];
     setInput("");
     setResult(null);
     startedAtRef.current = Date.now();
@@ -454,6 +469,7 @@ export default function TrainingFreeTalkPage() {
     } catch (e: any) {
       setError(e?.message ?? "Free Talkの開始に失敗しました。");
     } finally {
+      initializingRef.current = false;
       setLoadingInit(false);
     }
   }
@@ -463,12 +479,18 @@ export default function TrainingFreeTalkPage() {
     didInitRef.current = true;
 
     const restored = loadActiveFreeTalk();
-    if (restored && restored.difficulty === difficulty) {
+    if (restored && (restored.result || restored.difficulty === difficulty)) {
       startedAtRef.current = restored.startedAt;
       const lastExaminer = [...restored.msgs].reverse().find((message) => message.role === "examiner");
       lastSpokenRef.current = lastExaminer?.text ?? "";
       messagesRef.current = restored.msgs;
       setMsgs(restored.msgs);
+      if (restored.result) {
+        endedRef.current = true;
+        setResult(restored.result);
+        setLoadingInit(false);
+        return;
+      }
       if (restored.msgs[restored.msgs.length - 1]?.role === "user") {
         setError("返答待ちの回答を復元しました。「同じ回答で返答を再取得」を押すと続けられます。");
       }
@@ -481,7 +503,7 @@ export default function TrainingFreeTalkPage() {
   }, [difficulty]);
 
   useEffect(() => {
-    if (!persistenceReadyRef.current || result || msgs.length === 0) return;
+    if (!persistenceReadyRef.current || endedRef.current || result || msgs.length === 0) return;
     const payload: PersistedFreeTalk = {
       version: 1,
       savedAt: Date.now(),
@@ -497,7 +519,7 @@ export default function TrainingFreeTalkPage() {
   async function sendAnswer(forcedText?: string) {
     setError("");
     if (accessBlocked) return;
-    if (loadingInit || loadingReply || result || replyRequestRef.current || awaitingReply || messagesRef.current[messagesRef.current.length - 1]?.role === "user") return;
+    if (endedRef.current || loadingInit || loadingReply || result || replyRequestRef.current || awaitingReply || messagesRef.current[messagesRef.current.length - 1]?.role === "user") return;
     if (isRecording || isStarting || isTranscribing) return;
 
     const text = (forcedText ?? input).trim();
@@ -515,15 +537,7 @@ export default function TrainingFreeTalkPage() {
     const userTurnCount = nextMsgs.filter((m) => m.role === "user").length;
 
     if (userTurnCount >= MAX_TURNS) {
-      const closing = "Thank you. This concludes the Free Talk training.";
-      const finalLogs = [...nextMsgs, { role: "examiner" as const, text: closing }];
-      setMsgs(finalLogs);
-      setResult({
-        finishedAt: new Date().toISOString(),
-        durationSec: Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000)),
-        logs: finalLogs,
-      });
-      clearActiveFreeTalk();
+      finishNow();
       return;
     }
 
@@ -531,7 +545,7 @@ export default function TrainingFreeTalkPage() {
   }
 
   async function requestReply(nextMsgs: Msg[]) {
-    if (replyRequestRef.current || result || nextMsgs[nextMsgs.length - 1]?.role !== "user") return;
+    if (endedRef.current || replyRequestRef.current || result || nextMsgs[nextMsgs.length - 1]?.role !== "user") return;
     const controller = new AbortController();
     replyRequestRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 60_000);
@@ -584,16 +598,36 @@ export default function TrainingFreeTalkPage() {
   }
 
   function finishNow() {
-    if (accessBlocked) return;
+    if (accessBlocked || endedRef.current || initializingRef.current) return;
     const closing = "Thank you. This concludes the Free Talk training.";
-    const finalLogs = [...msgs, { role: "examiner" as const, text: closing }];
-    setMsgs(finalLogs);
-    setResult({
+    const finalLogs = [...messagesRef.current, { role: "examiner" as const, text: closing }];
+    const completed: FreeTalkResult = {
       finishedAt: new Date().toISOString(),
       durationSec: Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000)),
       logs: finalLogs,
-    });
-    clearActiveFreeTalk();
+    };
+    try {
+      // Persist completion atomically before rendering results or loading recording players.
+      localStorage.setItem(ACTIVE_FREETALK_KEY, JSON.stringify({
+        version: 1,
+        savedAt: Date.now(),
+        startedAt: startedAtRef.current,
+        difficulty,
+        msgs: finalLogs,
+        result: completed,
+      } satisfies PersistedFreeTalk));
+    } catch {
+      setError("終了結果を保存できませんでした。端末の空き容量を確認して、もう一度終了してください。");
+      return;
+    }
+    endedRef.current = true;
+    persistenceReadyRef.current = false;
+    replyRequestRef.current?.abort();
+    replyRequestRef.current = null;
+    setLoadingReply(false);
+    messagesRef.current = finalLogs;
+    setMsgs(finalLogs);
+    setResult(completed);
   }
 
   const canSend =
@@ -781,12 +815,12 @@ export default function TrainingFreeTalkPage() {
   };
 
   function onGoTop() {
-    clearActiveFreeTalk();
+    if (!endedRef.current) clearActiveFreeTalk();
     router.push("/");
   }
 
   function onBackToTraining() {
-    clearActiveFreeTalk();
+    if (!endedRef.current) clearActiveFreeTalk();
     router.push("/training");
   }
 
@@ -947,7 +981,7 @@ export default function TrainingFreeTalkPage() {
               <button
                 type="button"
                 onClick={finishNow}
-                disabled={loadingInit || loadingReply || !!result}
+                disabled={loadingInit || loadingReply || isRecording || isStarting || isTranscribing || !!result}
                 style={{
                   ...sendBtn,
                   background: "rgba(255,255,255,0.08)",
