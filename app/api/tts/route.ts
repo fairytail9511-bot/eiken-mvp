@@ -78,10 +78,18 @@ export async function POST(req: Request) {
       );
     }
 
-    return new NextResponse(elevenRes.body, {
+    // Read the complete provider response before sending success headers. A failed
+    // upstream stream must be reported as an error, not a playable partial MP3.
+    const audio = await elevenRes.arrayBuffer();
+    if (!audio.byteLength) {
+      return NextResponse.json({ ok: false, error: "ElevenLabs returned empty audio" }, { status: 502 });
+    }
+
+    return new NextResponse(audio, {
       status: 200,
       headers: {
         "Content-Type": "audio/mpeg",
+        "Content-Length": String(audio.byteLength),
         "Cache-Control": "no-store",
       },
     });

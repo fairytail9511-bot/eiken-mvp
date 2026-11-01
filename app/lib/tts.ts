@@ -94,7 +94,9 @@ async function requestTtsBlob(text: string, gender: TtsGender, signal: AbortSign
     throw new Error(`TTS failed: ${res.status} ${detail}`);
   }
 
-  return await res.blob();
+  const blob = await res.blob();
+  if (!blob.size) throw new Error("TTS returned empty audio");
+  return blob;
 }
 
 async function playBlobOnce(opts: {
@@ -135,7 +137,17 @@ async function playBlobOnce(opts: {
       lastProgressAt = Date.now();
       opts.onStart?.();
     };
-    const onEnded = () => finish();
+    const onEnded = () => {
+      // An ended event alone is not sufficient on interrupted media sessions.
+      // Do not unlock the next answer when a clip hasn't actually played to its end.
+      const duration = a.duration;
+      if (!started || a.currentTime <= 0 ||
+          (Number.isFinite(duration) && duration > 0 && a.currentTime < duration - 0.35)) {
+        finish(new Error("Audio ended before playback completed; please tap to retry"));
+        return;
+      }
+      finish();
+    };
     const onError = () => finish(new Error(`Audio playback failed (${a.error?.code ?? "unknown"})`));
     const onAbort = () => finish(new DOMException("Playback cancelled", "AbortError"));
 
@@ -168,8 +180,11 @@ async function playBlobOnce(opts: {
 }
 
 /** One utterance, with cached generated chunks and a cursor for failed playback. */
-export function createTtsPlayback(text: string, gender: TtsGender) {
-  const chunks = splitIntoChunks(text, 260);
+export function createTtsPlayback(text: string, gender: TtsGender, options?: { singleClip?: boolean }) {
+  const normalized = text.trim();
+  const chunks = options?.singleClip
+    ? (normalized ? [normalized] : [])
+    : splitIntoChunks(normalized, 260);
   const blobs = new Map<number, Blob>();
   let nextChunk = 0;
   let busy = false;

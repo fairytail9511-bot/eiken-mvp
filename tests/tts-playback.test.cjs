@@ -15,6 +15,7 @@ function harness() {
   const revoked = [];
   const audio = {
     currentTime: 0,
+    duration: 10,
     addEventListener(name, handler) { events.set(name, handler); },
     removeEventListener(name, handler) { if (events.get(name) === handler) events.delete(name); },
     pause() {},
@@ -54,7 +55,11 @@ function harness() {
   return {
     create: output.exports.createTtsPlayback,
     audio,
-    emit: (name) => events.get(name)?.(),
+    emit: (name) => {
+      if (name === 'ended') audio.currentTime = audio.duration;
+      events.get(name)?.();
+    },
+    emitRaw: (name) => events.get(name)?.(),
     fail: () => { failNext = true; },
     resetSync: () => { synchronousPlay = false; },
     wasSync: () => synchronousPlay,
@@ -132,4 +137,38 @@ test('watchdog allows long advancing playback but reports a persistent freeze', 
   h.advance(30_000);
   await rejected;
   assert.equal(h.stats().timers, 0);
+});
+
+test('Free Talk single-clip mode fetches and plays a long reply as one complete source', async () => {
+  const h = harness();
+  const run = h.create('A'.repeat(200) + '. ' + 'B'.repeat(150), 'female', { singleClip: true }).play();
+  await flush();
+  h.emit('ended');
+  await run;
+  assert.deepEqual(h.stats(), { fetches: 1, plays: 1, timers: 0, revoked: 1 });
+});
+
+test('an early ended event is a failure and the complete clip remains available for retry', async () => {
+  const h = harness();
+  const playback = h.create('A complete spoken reply.', 'female', { singleClip: true });
+  const run = playback.play();
+  const failed = assert.rejects(run, /before playback completed/);
+  await flush();
+  h.audio.currentTime = 2;
+  h.emitRaw('ended');
+  await failed;
+  const retry = playback.play();
+  h.emit('ended');
+  await retry;
+  assert.equal(h.stats().fetches, 1);
+  assert.equal(h.stats().plays, 2);
+});
+
+test('ended without any playback progress is not treated as success', async () => {
+  const h = harness();
+  const run = h.create('Hello there.', 'female').play();
+  const failed = assert.rejects(run, /before playback completed/);
+  await flush();
+  h.emitRaw('ended');
+  await failed;
 });

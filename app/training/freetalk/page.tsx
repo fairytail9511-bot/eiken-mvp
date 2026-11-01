@@ -261,7 +261,8 @@ export default function TrainingFreeTalkPage() {
     if (!audioQueueRef.current.some((entry) => entry.text === t)) {
       let playback = audioCacheRef.current.get(t);
       if (!playback) {
-        playback = createTtsPlayback(t, ttsGender);
+        // A Free Talk reply must not change audio sources halfway through a sentence.
+        playback = createTtsPlayback(t, ttsGender, { singleClip: true });
         audioCacheRef.current.set(t, playback);
       }
       audioQueueRef.current.push({ text: t, playback });
