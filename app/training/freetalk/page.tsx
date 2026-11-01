@@ -165,6 +165,27 @@ export default function TrainingFreeTalkPage() {
   const startedAtRef = useRef<number>(Date.now());
   const didInitRef = useRef(false);
   const persistenceReadyRef = useRef(false);
+  const replyRequestRef = useRef<AbortController | null>(null);
+  const messagesRef = useRef<Msg[]>([]);
+  const awaitingReply = msgs[msgs.length - 1]?.role === "user";
+
+  // Save the complete turn before publishing it to React, including pending user turns.
+  function commitMessages(next: Msg[]) {
+    localStorage.setItem(ACTIVE_FREETALK_KEY, JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      startedAt: startedAtRef.current,
+      difficulty,
+      msgs: next,
+    } satisfies PersistedFreeTalk));
+    messagesRef.current = next;
+    setMsgs(next);
+  }
+
+  useEffect(() => () => {
+    replyRequestRef.current?.abort();
+    replyRequestRef.current = null;
+  }, []);
 
   const [isMouthOpen, setIsMouthOpen] = useState(false);
   const mouthTimerRef = useRef<number | null>(null);
@@ -428,7 +449,7 @@ export default function TrainingFreeTalkPage() {
         throw new Error(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
       }
 
-      setMsgs([{ role: "examiner", text }]);
+      commitMessages([{ role: "examiner", text }]);
       persistenceReadyRef.current = true;
     } catch (e: any) {
       setError(e?.message ?? "Free Talkの開始に失敗しました。");
@@ -446,7 +467,11 @@ export default function TrainingFreeTalkPage() {
       startedAtRef.current = restored.startedAt;
       const lastExaminer = [...restored.msgs].reverse().find((message) => message.role === "examiner");
       lastSpokenRef.current = lastExaminer?.text ?? "";
+      messagesRef.current = restored.msgs;
       setMsgs(restored.msgs);
+      if (restored.msgs[restored.msgs.length - 1]?.role === "user") {
+        setError("返答待ちの回答を復元しました。「同じ回答で返答を再取得」を押すと続けられます。");
+      }
       setLoadingInit(false);
       persistenceReadyRef.current = true;
       return;
@@ -472,14 +497,19 @@ export default function TrainingFreeTalkPage() {
   async function sendAnswer(forcedText?: string) {
     setError("");
     if (accessBlocked) return;
-    if (loadingInit || loadingReply || result) return;
+    if (loadingInit || loadingReply || result || replyRequestRef.current || awaitingReply || messagesRef.current[messagesRef.current.length - 1]?.role === "user") return;
     if (isRecording || isStarting || isTranscribing) return;
 
     const text = (forcedText ?? input).trim();
     if (!text) return;
 
-    const nextMsgs = [...msgs, { role: "user" as const, text }];
-    setMsgs(nextMsgs);
+    const nextMsgs = [...messagesRef.current, { role: "user" as const, text }];
+    try {
+      commitMessages(nextMsgs);
+    } catch {
+      setError("回答を端末に保存できませんでした。空き容量やブラウザの保存設定を確認してください。");
+      return;
+    }
     setInput("");
 
     const userTurnCount = nextMsgs.filter((m) => m.role === "user").length;
@@ -497,14 +527,24 @@ export default function TrainingFreeTalkPage() {
       return;
     }
 
+    await requestReply(nextMsgs);
+  }
+
+  async function requestReply(nextMsgs: Msg[]) {
+    if (replyRequestRef.current || result || nextMsgs[nextMsgs.length - 1]?.role !== "user") return;
+    const controller = new AbortController();
+    replyRequestRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 60_000);
+    setError("");
     setLoadingReply(true);
     try {
-           const res = await fetch("/api/freetalk_followup", {
+      const res = await fetch("/api/freetalk_followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           difficulty,
-          lastUser: text,
+          lastUser: nextMsgs[nextMsgs.length - 1].text,
           history: nextMsgs,
         }),
       });
@@ -528,11 +568,18 @@ export default function TrainingFreeTalkPage() {
 
       if (!reply) throw new Error("Follow-up message was not returned");
 
-      setMsgs((prev) => [...prev, { role: "examiner", text: reply }]);
-    } catch (e: any) {
-      setError(e?.message ?? "返答の生成に失敗しました。");
+      // Only the live request may complete this exact pending turn.
+      if (replyRequestRef.current !== controller || controller.signal.aborted) return;
+      commitMessages([...nextMsgs, { role: "examiner", text: reply }]);
+    } catch {
+      if (replyRequestRef.current !== controller) return;
+      setError("返答を取得できませんでした。回答は保存済みです。同じ回答で再取得できます。");
     } finally {
-      setLoadingReply(false);
+      window.clearTimeout(timeout);
+      if (replyRequestRef.current === controller) {
+        replyRequestRef.current = null;
+        setLoadingReply(false);
+      }
     }
   }
 
@@ -550,10 +597,10 @@ export default function TrainingFreeTalkPage() {
   }
 
   const canSend =
-    !accessBlocked && !loadingInit && !loadingReply && !isRecording && !isTranscribing && !result;
+    !accessBlocked && !loadingInit && !loadingReply && !awaitingReply && !isRecording && !isTranscribing && !result;
 
   const micDisabled =
-    accessBlocked || loadingInit || loadingReply || isTranscribing || isStarting || isRecording || !!result;
+    accessBlocked || loadingInit || loadingReply || awaitingReply || isTranscribing || isStarting || isRecording || !!result;
 
   const statusText = accessBlocked
     ? "無料枠上限"
@@ -849,6 +896,12 @@ export default function TrainingFreeTalkPage() {
 
               <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 12 }}>{statusText}</div>
 
+              {awaitingReply && !loadingReply ? (
+                <button type="button" onClick={() => void requestReply(messagesRef.current)} style={sendBtn}>
+                  同じ回答で返答を再取得
+                </button>
+              ) : null}
+
               <div style={rowStyle}>
                 <button type="button" onClick={startRecording} disabled={micDisabled} style={micBtn}>
                   🎤 Mic
@@ -866,7 +919,7 @@ export default function TrainingFreeTalkPage() {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Type your message here..."
-                    disabled={loadingReply || isTranscribing}
+                    disabled={loadingReply || awaitingReply || isTranscribing}
                     style={{
                       width: "100%",
                       borderRadius: 14,
