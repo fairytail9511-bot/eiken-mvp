@@ -179,10 +179,10 @@ async function playBlobOnce(opts: {
   });
 }
 
-/** One utterance, with cached generated chunks and a cursor for failed playback. */
+/** One utterance uses one cached audio clip by default, including long questions. */
 export function createTtsPlayback(text: string, gender: TtsGender, options?: { singleClip?: boolean }) {
   const normalized = text.trim();
-  const chunks = options?.singleClip
+  const chunks = options?.singleClip !== false
     ? (normalized ? [normalized] : [])
     : splitIntoChunks(normalized, 260);
   const blobs = new Map<number, Blob>();

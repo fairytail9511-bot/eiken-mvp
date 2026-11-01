@@ -12,6 +12,7 @@ function harness() {
   let plays = 0;
   let failNext = false;
   let synchronousPlay = false;
+  const requestedTexts = [];
   const revoked = [];
   const audio = {
     currentTime: 0,
@@ -43,8 +44,9 @@ function harness() {
     clearTimeout,
     Date: { now: () => now },
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL: (url) => revoked.push(url) },
-    fetch: async () => {
+    fetch: async (_url, request) => {
       fetches++;
+      requestedTexts.push(JSON.parse(request.body).text);
       return { ok: true, blob: async () => new Blob(['audio'], { type: 'audio/mpeg' }) };
     },
     setInterval: (callback) => { timers.add(callback); return callback; },
@@ -52,8 +54,20 @@ function harness() {
   });
   const source = fs.readFileSync(require.resolve('../app/lib/tts.ts'), 'utf8');
   vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, context);
+  const sessionOutput = { exports: {} };
+  const sessionContext = vm.createContext({
+    exports: sessionOutput.exports,
+    require: () => output.exports,
+    AbortController,
+    console: { warn() {} },
+  });
+  vm.runInContext(ts.transpileModule(fs.readFileSync(require.resolve('../app/lib/ttsSession.ts'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  }).outputText, sessionContext);
   return {
     create: output.exports.createTtsPlayback,
+    createSession: sessionOutput.exports.createTtsSession,
+    requestedTexts,
     audio,
     emit: (name) => {
       if (name === 'ended') audio.currentTime = audio.duration;
@@ -97,7 +111,7 @@ test('temporary stalled event does not finish or skip audio', async () => {
 
 test('a failed second chunk resumes there and reuses its generated audio', async () => {
   const h = harness();
-  const playback = h.create('A'.repeat(200) + '. ' + 'B'.repeat(150), 'female');
+  const playback = h.create('A'.repeat(200) + '. ' + 'B'.repeat(150), 'female', { singleClip: false });
   const run = playback.play();
   const rejected = assert.rejects(run, { name: 'NotAllowedError' });
   await flush();
@@ -115,7 +129,7 @@ test('a failed second chunk resumes there and reuses its generated audio', async
 test('navigation abort stops playback and prevents later chunks from being generated', async () => {
   const h = harness();
   const controller = new AbortController();
-  const run = h.create('A'.repeat(200) + '. ' + 'B'.repeat(150), 'female').play({ signal: controller.signal });
+  const run = h.create('A'.repeat(200) + '. ' + 'B'.repeat(150), 'female', { singleClip: false }).play({ signal: controller.signal });
   const rejected = assert.rejects(run, { name: 'AbortError' });
   await flush();
   controller.abort();
@@ -171,4 +185,51 @@ test('ended without any playback progress is not treated as success', async () =
   await flush();
   h.emitRaw('ended');
   await failed;
+});
+
+test('all default callers generate a long utterance as one clip without truncating its text', async () => {
+  const h = harness();
+  const text = 'A'.repeat(200) + '. ' + 'B'.repeat(150) + '?';
+  const playback = h.create(text, 'female');
+  const run = playback.play();
+  await flush();
+  h.emit('ended');
+  await run;
+  assert.deepEqual(h.requestedTexts, [text]);
+  assert.equal(h.stats().fetches, 1);
+  assert.equal(h.stats().plays, 1);
+});
+
+test('the shared page queue keeps a long intro and long question separate and ordered', async () => {
+  const h = harness();
+  const intro = 'Introduction. '.repeat(25);
+  const question = 'Question details. '.repeat(25) + 'What do you think?';
+  const session = h.createSession('female', { onState() {}, onStart() {}, onEnd() {} });
+  const run = session.enqueue([intro, question]);
+  await flush();
+  assert.deepEqual(h.requestedTexts, [intro.trim()]);
+  h.emit('ended');
+  await flush();
+  assert.deepEqual(h.requestedTexts, [intro.trim(), question]);
+  h.emit('ended');
+  await run;
+  assert.equal(h.stats().plays, 2);
+  session.dispose();
+});
+
+test('a failed long question retries its cached clip through the shared page queue', async () => {
+  const h = harness();
+  const states = [];
+  const question = 'Question details. '.repeat(25) + 'What do you think?';
+  const session = h.createSession('female', { onState: (state) => states.push(state), onStart() {}, onEnd() {} });
+  h.fail();
+  const run = session.enqueue([question]);
+  await flush();
+  assert.ok(states.at(-1).error);
+  const retry = session.retry();
+  h.emit('ended');
+  await Promise.all([run, retry]);
+  assert.deepEqual(h.requestedTexts, [question]);
+  assert.equal(h.stats().plays, 2);
+  session.dispose();
 });
