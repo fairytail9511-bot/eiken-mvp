@@ -5,7 +5,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LS_KEYS } from "@/app/types";
 import Image from "next/image";
-import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { type TtsGender } from "@/app/lib/tts";
+import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
+import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 
 /* =====================
@@ -169,7 +171,7 @@ export default function SmalltalkPage() {
   // ===== Mouth flap =====
   const [isExaminerSpeaking, setIsExaminerSpeaking] = useState(false);
   const mouthTimerRef = useRef<number | null>(null);
-  const speakingRef = useRef(false);
+  const audio = useSpeechPlayback(ttsGender, startMouthFlap, stopMouthFlap);
 
   function startMouthFlap() {
     if (mouthTimerRef.current) {
@@ -209,21 +211,7 @@ export default function SmalltalkPage() {
   async function speakEn(text: string) {
     const t = String(text ?? "").trim();
     if (!t) return;
-    if (speakingRef.current) return;
-
-    speakingRef.current = true;
-    try {
-      await playTtsOnce({
-        text: t,
-        gender: ttsGender,
-        onStart: startMouthFlap,
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      speakingRef.current = false;
-    }
+    await audio.speak(t);
   }
 
   /* =====================
@@ -285,7 +273,6 @@ export default function SmalltalkPage() {
     return () => {
       cleanupRecorder();
       stopMouthFlap();
-      speakingRef.current = false;
     };
   }, []);
 
@@ -382,6 +369,7 @@ export default function SmalltalkPage() {
      Recorder
   ===================== */
   async function startRecording() {
+    if (audio.busy) return;
     setRecError("");
     if (busy) return;
     if (phase === "ready_to_start") return;
@@ -524,9 +512,10 @@ export default function SmalltalkPage() {
     router.push("/");
   }
 
-  const micDisabled = busy || phase === "ready_to_start" || isTranscribing || isStarting || isRecording;
+  const micDisabled = audio.busy || busy || phase === "ready_to_start" || isTranscribing || isStarting || isRecording;
 
   const canSend =
+    !audio.busy &&
     !busy &&
     phase !== "ready_to_start" &&
     !isRecording &&
@@ -632,6 +621,7 @@ export default function SmalltalkPage() {
   return (
     <main style={rootStyle}>
       <div style={shellStyle}>
+        <SpeechPlaybackNotice {...audio} />
         {/* ====== Avatar ====== */}
         <div style={avatarWrapStyle}>
           <div

@@ -4,7 +4,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
+import { type TtsGender } from "@/app/lib/tts";
+import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
+import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
@@ -277,68 +279,30 @@ export default function TrainingQAPage() {
     setIsMouthOpen(false);
   }
 
-  const speakingRef = useRef(false);
-  const queueSpeakingRef = useRef(false);
+  const audio = useSpeechPlayback(ttsGender, startMouthFlap, stopMouthFlap);
 
   async function speakNow(text: string) {
     const t = String(text ?? "").trim();
     if (!t) return;
-    if (queueSpeakingRef.current) return;
-    if (speakingRef.current) return;
-
-    speakingRef.current = true;
-    try {
-      await playTtsOnce({
-        text: t,
-        gender: ttsGender,
-        onStart: () => {
-          setTimeout(() => startMouthFlap(), 120);
-        },
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      speakingRef.current = false;
-    }
+    await audio.speak(t);
   }
 
   async function speakQueue(texts: string[]) {
     const q = texts.map((x) => String(x ?? "").trim()).filter(Boolean);
     if (!q.length) return;
-    if (queueSpeakingRef.current) return;
-
-    queueSpeakingRef.current = true;
-    try {
-      await playTtsQueue({
-        texts: q,
-        gender: ttsGender,
-        onStart: () => {
-          setTimeout(() => startMouthFlap(), 120);
-        },
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      queueSpeakingRef.current = false;
-      speakingRef.current = false;
-    }
+    lastSpokenRef.current = q[q.length - 1];
+    await audio.speakQueue(q);
   }
 
   useEffect(() => {
     return () => {
       stopMouthFlap();
-      speakingRef.current = false;
-      queueSpeakingRef.current = false;
     };
   }, []);
 
   const lastSpokenRef = useRef<string>("");
   useEffect(() => {
     if (!msgs.length) return;
-    if (!showTranscript) return;
-    if (queueSpeakingRef.current) return;
 
     const last = msgs[msgs.length - 1];
     if (last.role !== "examiner") return;
@@ -349,7 +313,7 @@ export default function TrainingQAPage() {
 
     lastSpokenRef.current = t;
     void speakNow(t);
-  }, [msgs, showTranscript]);
+  }, [msgs]);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -384,12 +348,11 @@ export default function TrainingQAPage() {
     return () => {
       cleanupRecorder();
       stopMouthFlap();
-      speakingRef.current = false;
-      queueSpeakingRef.current = false;
     };
   }, []);
 
   async function startRecording() {
+    if (audio.busy) return;
     setError("");
     if (accessBlocked) return;
     if (loadingInit || loadingScore || isDone || result) return;
@@ -503,6 +466,7 @@ export default function TrainingQAPage() {
 
   async function initTrainingQa() {
     if (!themeSelection) return;
+    audio.reset();
     await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     setLoadingInit(true);
     setError("");
@@ -599,6 +563,7 @@ export default function TrainingQAPage() {
   }
 
   function sendAnswer(forcedText?: string) {
+    if (audio.busy) return;
     setError("");
     if (accessBlocked) return;
     if (loadingInit || loadingScore || result) return;
@@ -738,9 +703,9 @@ export default function TrainingQAPage() {
     }
   }
 
-  const canSend = !accessBlocked && !loadingInit && !isDone && !loadingScore && !isRecording && !isTranscribing && !result;
+  const canSend = !audio.busy && !accessBlocked && !loadingInit && !isDone && !loadingScore && !isRecording && !isTranscribing && !result;
   const micDisabled =
-    accessBlocked || loadingInit || isDone || loadingScore || isTranscribing || isStarting || isRecording || !!result;
+    audio.busy || accessBlocked || loadingInit || isDone || loadingScore || isTranscribing || isStarting || isRecording || !!result;
 
   const statusText = accessBlocked
     ? "無料枠上限"
@@ -947,6 +912,7 @@ export default function TrainingQAPage() {
   return (
     <main style={containerStyle}>
       <div style={phoneStyle}>
+        <SpeechPlaybackNotice {...audio} />
         <div style={avatarWrapStyle}>
           <div style={avatarInnerStyle}>
             <Image

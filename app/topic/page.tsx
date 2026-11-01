@@ -5,7 +5,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LS_KEYS } from "../types";
 import Image from "next/image";
-import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { type TtsGender } from "@/app/lib/tts";
+import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
+import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 
 // ====== 🎤 helpers ======
@@ -121,26 +123,12 @@ export default function TopicPage() {
     setIsMouthOpen(false);
   }
 
-  const speakingRef = useRef(false);
+  const audio = useSpeechPlayback(ttsGender, startMouthFlap, stopMouthFlap);
 
   async function speakAsync(text: string): Promise<void> {
     const t = String(text ?? "").trim();
     if (!t) return;
-    if (speakingRef.current) return;
-
-    speakingRef.current = true;
-    try {
-      await playTtsOnce({
-        text: t,
-        gender: ttsGender,
-        onStart: startMouthFlap,
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      speakingRef.current = false;
-    }
+    await audio.speak(t);
   }
 
   function speak(text: string) {
@@ -177,7 +165,6 @@ export default function TopicPage() {
     return () => {
       cleanupRecorder();
       stopMouthFlap();
-      speakingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -232,6 +219,7 @@ export default function TopicPage() {
     if (didStartPrepRef.current) return;
 
     didStartPrepRef.current = true;
+    let cancelled = false;
 
     (async () => {
       setPrepStarted(false);
@@ -239,9 +227,10 @@ export default function TopicPage() {
       setSecondsLeft(PREP_SECONDS);
 
       await speakAsync(examinerIntro);
-
+      if (cancelled) return;
       setPrepStarted(true);
     })();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topicTexts]);
 
@@ -281,6 +270,7 @@ export default function TopicPage() {
 
   // ====== 🎤 Start recording ======
   async function startRecording() {
+    if (audio.busy) return;
     setError("");
     if (isRecording || isStarting || isTranscribing) return;
 
@@ -423,7 +413,7 @@ export default function TopicPage() {
     router.push(`/speech?topic=${encodeURIComponent(chosenTopic)}`);
   }
 
-  const canSubmit = phase === "ask" && !!selectedTopicText && !isTranscribing && !isStarting;
+  const canSubmit = !audio.busy && phase === "ask" && !!selectedTopicText && !isTranscribing && !isStarting;
 
   const stopBtnStyle: React.CSSProperties = {
     background: stopEnabled
@@ -507,6 +497,7 @@ export default function TopicPage() {
   return (
     <main style={pageBg}>
       <div style={cardWrap}>
+        <SpeechPlaybackNotice {...audio} />
         {/* ===== Top fixed avatar (約1/3) ===== */}
         <div
           style={{
@@ -708,7 +699,7 @@ export default function TopicPage() {
                   <button
                     type="button"
                     onClick={startRecording}
-                    disabled={isTranscribing || isStarting || isRecording}
+                    disabled={audio.busy || isTranscribing || isStarting || isRecording}
                     style={{
                       width: 120,
                       borderRadius: 999,

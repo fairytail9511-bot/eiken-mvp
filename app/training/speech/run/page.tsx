@@ -4,7 +4,9 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
-import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { type TtsGender } from "@/app/lib/tts";
+import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
+import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
@@ -263,7 +265,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   const chunksRef = useRef<BlobPart[]>([]);
   const mimeRef = useRef<string>("");
   const autoSubmitAfterStopRef = useRef(false);
-  const speakingRef = useRef(false);
+  const audio = useSpeechPlayback(ttsGender, startMouthFlap, stopMouthFlap);
 
   function cleanupRecorder() {
     try {
@@ -280,21 +282,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   async function speakOnce(text: string) {
     const t = String(text ?? "").trim();
     if (!t) return;
-    if (speakingRef.current) return;
-
-    speakingRef.current = true;
-    try {
-      await playTtsOnce({
-        text: t,
-        gender: ttsGender,
-        onStart: startMouthFlap,
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      speakingRef.current = false;
-    }
+    await audio.speak(t);
   }
 
   useEffect(() => {
@@ -316,7 +304,6 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
     return () => {
       cleanupRecorder();
       stopMouthFlap();
-      speakingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -347,14 +334,17 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
     didSpeakRef.current = true;
 
     let timerId: number | null = null;
+    let cancelled = false;
 
     (async () => {
       await speakOnce(examinerLine);
+      if (cancelled) return;
       startedAtRef.current = Date.now();
       timerId = window.setInterval(() => setTick((t) => t + 1), 1000);
     })();
 
     return () => {
+      cancelled = true;
       if (timerId) window.clearInterval(timerId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -374,6 +364,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   }, [elapsedSec]);
 
   async function startRecording() {
+    if (audio.busy) return;
     setError("");
     if (!trainingAccessGrantedRef.current || accessBlocked) return;
     if (result) return;
@@ -565,6 +556,7 @@ const score = buildSpeechScore(s, blocks, feedback);
   }
 
   function onRetrySameTopic() {
+    audio.reset();
     void clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     const access = consumeFreeTrainingUse();
     if (!access.ok) {
@@ -597,7 +589,7 @@ const score = buildSpeechScore(s, blocks, feedback);
     router.push("/");
   }
 
-  const canSubmit = trainingAccessGranted && !accessBlocked && !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
+  const canSubmit = !audio.busy && trainingAccessGranted && !accessBlocked && !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
 
   const gold = "rgba(234, 179, 8, 0.60)";
   const goldSoft = "rgba(234, 179, 8, 0.22)";
@@ -735,6 +727,7 @@ const score = buildSpeechScore(s, blocks, feedback);
     <main style={pageStyle}>
       <div style={shellStyle}>
         <div style={topStyle}>
+          <SpeechPlaybackNotice {...audio} />
           <div style={avatarWrapStyle}>
             <div style={avatarBoxStyle}>
               <Image
@@ -796,7 +789,7 @@ const score = buildSpeechScore(s, blocks, feedback);
                     type="button"
                     onClick={startRecording}
                     style={micBtnStyle}
-                    disabled={!trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || isScoring || !!result}
+                    disabled={audio.busy || !trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || isScoring || !!result}
                   >
                     🎤 Mic
                   </button>

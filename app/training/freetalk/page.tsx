@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { createTtsPlayback, type TtsGender } from "@/app/lib/tts";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
@@ -216,35 +216,65 @@ export default function TrainingFreeTalkPage() {
 
   const speakingRef = useRef(false);
   const speechAbortRef = useRef<AbortController | null>(null);
+  const audioQueueRef = useRef<Array<{ text: string; playback: ReturnType<typeof createTtsPlayback> }>>([]);
+  const audioCacheRef = useRef(new Map<string, ReturnType<typeof createTtsPlayback>>());
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [audioError, setAudioError] = useState("");
 
-  async function speakNow(text: string) {
-    const t = String(text ?? "").trim();
-    if (!t) return;
+  async function drainAudioQueue() {
     if (speakingRef.current) return;
-
+    if (!audioQueueRef.current.length) return;
     speakingRef.current = true;
+    setAudioBusy(true);
+    setAudioError("");
     const controller = new AbortController();
     speechAbortRef.current = controller;
     try {
-      await playTtsOnce({
-        text: t,
-        signal: controller.signal,
-        gender: ttsGender,
-        onStart: () => {
-          startMouthFlap();
-        },
-        onEnd: stopMouthFlap,
-      });
-    } catch {
+      while (audioQueueRef.current.length && !controller.signal.aborted) {
+        const entry = audioQueueRef.current[0];
+        await entry.playback.play({
+          signal: controller.signal,
+          onStart: startMouthFlap,
+          onEnd: stopMouthFlap,
+        });
+        if (controller.signal.aborted) return;
+        audioQueueRef.current.shift();
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        console.warn("Free Talk audio playback failed", error);
+        setAudioError("音声を再生できませんでした。下のボタンを押すと、再生できなかった箇所から再試行します。");
+      }
       stopMouthFlap();
     } finally {
-      speakingRef.current = false;
+      if (speechAbortRef.current === controller) {
+        speechAbortRef.current = null;
+        speakingRef.current = false;
+        setAudioBusy(false);
+      }
     }
+  }
+
+  function speakNow(text: string) {
+    const t = String(text ?? "").trim();
+    if (!t) return;
+    if (!audioQueueRef.current.some((entry) => entry.text === t)) {
+      let playback = audioCacheRef.current.get(t);
+      if (!playback) {
+        playback = createTtsPlayback(t, ttsGender);
+        audioCacheRef.current.set(t, playback);
+      }
+      audioQueueRef.current.push({ text: t, playback });
+    }
+    return drainAudioQueue();
   }
 
   useEffect(() => {
     return () => {
       speechAbortRef.current?.abort();
+      speechAbortRef.current = null;
+      audioQueueRef.current = [];
+      audioCacheRef.current.clear();
       stopMouthFlap();
       speakingRef.current = false;
     };
@@ -259,9 +289,10 @@ export default function TrainingFreeTalkPage() {
 
     const t = String(last.text ?? "").trim();
     if (!t) return;
-    if (lastSpokenRef.current === t) return;
+    const turnKey = `${msgs.length}:${t}`;
+    if (lastSpokenRef.current === turnKey) return;
 
-    lastSpokenRef.current = t;
+    lastSpokenRef.current = turnKey;
     void speakNow(t);
   }, [msgs]);
 
@@ -305,7 +336,7 @@ export default function TrainingFreeTalkPage() {
   async function startRecording() {
     setError("");
     if (accessBlocked) return;
-    if (loadingInit || loadingReply || result) return;
+    if (loadingInit || loadingReply || result || speakingRef.current) return;
     if (isRecording || isStarting || isTranscribing) return;
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -420,6 +451,12 @@ export default function TrainingFreeTalkPage() {
     replyRequestRef.current?.abort();
     replyRequestRef.current = null;
     speechAbortRef.current?.abort();
+    speechAbortRef.current = null;
+    audioQueueRef.current = [];
+    audioCacheRef.current.clear();
+    speakingRef.current = false;
+    setAudioBusy(false);
+    setAudioError("");
     persistenceReadyRef.current = false;
     clearActiveFreeTalk();
     await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
@@ -482,7 +519,7 @@ export default function TrainingFreeTalkPage() {
     if (restored && (restored.result || restored.difficulty === difficulty)) {
       startedAtRef.current = restored.startedAt;
       const lastExaminer = [...restored.msgs].reverse().find((message) => message.role === "examiner");
-      lastSpokenRef.current = lastExaminer?.text ?? "";
+      lastSpokenRef.current = lastExaminer ? `${restored.msgs.length}:${lastExaminer.text}` : "";
       messagesRef.current = restored.msgs;
       setMsgs(restored.msgs);
       if (restored.result) {
@@ -519,7 +556,7 @@ export default function TrainingFreeTalkPage() {
   async function sendAnswer(forcedText?: string) {
     setError("");
     if (accessBlocked) return;
-    if (endedRef.current || loadingInit || loadingReply || result || replyRequestRef.current || awaitingReply || messagesRef.current[messagesRef.current.length - 1]?.role === "user") return;
+    if (endedRef.current || loadingInit || loadingReply || result || speakingRef.current || replyRequestRef.current || awaitingReply || messagesRef.current[messagesRef.current.length - 1]?.role === "user") return;
     if (isRecording || isStarting || isTranscribing) return;
 
     const text = (forcedText ?? input).trim();
@@ -631,10 +668,10 @@ export default function TrainingFreeTalkPage() {
   }
 
   const canSend =
-    !accessBlocked && !loadingInit && !loadingReply && !awaitingReply && !isRecording && !isTranscribing && !result;
+    !accessBlocked && !loadingInit && !loadingReply && !audioBusy && !awaitingReply && !isRecording && !isTranscribing && !result;
 
   const micDisabled =
-    accessBlocked || loadingInit || loadingReply || awaitingReply || isTranscribing || isStarting || isRecording || !!result;
+    accessBlocked || loadingInit || loadingReply || audioBusy || awaitingReply || isTranscribing || isStarting || isRecording || !!result;
 
   const statusText = accessBlocked
     ? "無料枠上限"
@@ -894,6 +931,17 @@ export default function TrainingFreeTalkPage() {
         </div>
 
         <div style={controlsStyle}>
+          {audioBusy ? (
+            <div role="status" style={{ color: "#fff", fontSize: 12 }}>音声を準備・再生中…</div>
+          ) : null}
+          {audioError ? (
+            <div role="alert" style={{ display: "grid", gap: 8, color: "#fecaca", fontSize: 13 }}>
+              {audioError}
+              <button type="button" onClick={() => void drainAudioQueue()} disabled={audioBusy} style={sendBtn}>
+                音声を再生し直す
+              </button>
+            </div>
+          ) : null}
           {!result ? (
             <>
               <div style={{ color: "#fff", fontSize: 22, fontWeight: 900, textAlign: "center" }}>

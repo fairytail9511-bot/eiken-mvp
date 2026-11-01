@@ -6,7 +6,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 
 import { LS_KEYS, type PendingInterview } from "@/app/types";
-import { playTtsOnce, type TtsGender } from "@/app/lib/tts";
+import { type TtsGender } from "@/app/lib/tts";
+import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
+import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import { createRecordingSessionId, saveLocalRecording } from "@/app/lib/localRecordings";
 import { ACTIVE_REVIEW_ITEM_KEY } from "@/app/lib/reviewList";
@@ -135,7 +137,7 @@ export default function SpeechClient() {
   const mimeRef = useRef<string>("");
 
   const autoSubmitAfterStopRef = useRef(false);
-  const speakingRef = useRef(false);
+  const audio = useSpeechPlayback(ttsGender, startMouthFlap, stopMouthFlap);
 
   function cleanupRecorder() {
     try {
@@ -152,21 +154,7 @@ export default function SpeechClient() {
   async function speakOnce(text: string) {
     const t = String(text ?? "").trim();
     if (!t) return;
-    if (speakingRef.current) return;
-
-    speakingRef.current = true;
-    try {
-      await playTtsOnce({
-        text: t,
-        gender: ttsGender,
-        onStart: startMouthFlap,
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      speakingRef.current = false;
-    }
+    await audio.speak(t);
   }
 
   useEffect(() => {
@@ -180,7 +168,6 @@ export default function SpeechClient() {
     return () => {
       cleanupRecorder();
       stopMouthFlap();
-      speakingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -192,14 +179,17 @@ export default function SpeechClient() {
     didSpeakRef.current = true;
 
     let timerId: number | null = null;
+    let cancelled = false;
 
     (async () => {
       await speakOnce(examinerLine);
+      if (cancelled) return;
       startedAtRef.current = Date.now();
       timerId = window.setInterval(() => setTick((t) => t + 1), 1000);
     })();
 
     return () => {
+      cancelled = true;
       if (timerId) window.clearInterval(timerId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -344,6 +334,7 @@ export default function SpeechClient() {
 
   // ====== 🎤 Start recording ======
   async function startRecording() {
+    if (audio.busy) return;
     setError("");
     if (isRecording || isStarting || isTranscribing) return;
 
@@ -504,13 +495,14 @@ export default function SpeechClient() {
     router.push("/");
   }
 
-  const canSubmit = !isStarting && !isTranscribing && (speech ?? "").trim().length > 0;
+  const canSubmit = !audio.busy && !isStarting && !isTranscribing && (speech ?? "").trim().length > 0;
 
   return (
     <main style={pageStyle}>
       <div style={shellStyle}>
         {/* ===== TOP (sticky): avatar + small info ===== */}
         <div style={topStyle}>
+          <SpeechPlaybackNotice {...audio} />
           <div style={avatarWrapStyle}>
             <div style={avatarBoxStyle}>
               <Image
@@ -600,7 +592,7 @@ export default function SpeechClient() {
                     type="button"
                     onClick={startRecording}
                     style={micBtnStyle}
-                    disabled={isTranscribing || isStarting || isRecording}
+                    disabled={audio.busy || isTranscribing || isStarting || isRecording}
                   >
                     🎤 Mic
                   </button>

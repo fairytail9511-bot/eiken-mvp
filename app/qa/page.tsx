@@ -15,7 +15,9 @@ import type {
 } from "@/app/types";
 import { LS_KEYS } from "@/app/types";
 
-import { playTtsOnce, playTtsQueue, type TtsGender } from "@/app/lib/tts";
+import { type TtsGender } from "@/app/lib/tts";
+import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
+import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import { saveLocalRecording } from "@/app/lib/localRecordings";
 
@@ -214,69 +216,33 @@ export default function QAPage() {
     setIsMouthOpen(false);
   }
 
-  const speakingRef = useRef(false);
-  const queueSpeakingRef = useRef(false);
+  const audio = useSpeechPlayback(ttsGender, startMouthFlap, stopMouthFlap);
 
   async function speakNow(text: string) {
     const t = String(text ?? "").trim();
     if (!t) return;
-    if (queueSpeakingRef.current) return;
-    if (speakingRef.current) return;
-
-    speakingRef.current = true;
-    try {
-      await playTtsOnce({
-        text: t,
-        gender: ttsGender,
-        onStart: () => {
-          setTimeout(() => startMouthFlap(), 120);
-        },
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      speakingRef.current = false;
-    }
+    await audio.speak(t);
   }
 
   async function speakQueue(texts: string[]) {
     const q = texts.map((x) => String(x ?? "").trim()).filter(Boolean);
     if (!q.length) return;
-    if (queueSpeakingRef.current) return;
-
-    queueSpeakingRef.current = true;
-    try {
-      await playTtsQueue({
-        texts: q,
-        gender: ttsGender,
-        onStart: () => {
-          setTimeout(() => startMouthFlap(), 120);
-        },
-        onEnd: stopMouthFlap,
-      });
-    } catch {
-      stopMouthFlap();
-    } finally {
-      queueSpeakingRef.current = false;
-      speakingRef.current = false;
-    }
+    // Mark the explicitly queued first question so the message effect won't duplicate it.
+    lastSpokenRef.current = q[q.length - 1];
+    await audio.speakQueue(q);
   }
 
   useEffect(() => {
     return () => {
       stopMouthFlap();
-      speakingRef.current = false;
-      queueSpeakingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 通常の自動読み上げ：最後の examiner 発言（キュー中は抑制）
+  // Explicit batches and subsequent questions share one playback queue.
   const lastSpokenRef = useRef<string>("");
   useEffect(() => {
     if (!msgs.length) return;
-    if (queueSpeakingRef.current) return;
 
     const last = msgs[msgs.length - 1];
     if (last.role !== "examiner") return;
@@ -326,13 +292,12 @@ export default function QAPage() {
     return () => {
       cleanupRecorder();
       stopMouthFlap();
-      speakingRef.current = false;
-      queueSpeakingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function startRecording() {
+    if (audio.busy) return;
     setError("");
     if (loadingInit || loadingScore || isDone) return;
     if (isRecording || isStarting || isTranscribing) return;
@@ -549,6 +514,7 @@ export default function QAPage() {
   }
 
   function sendAnswer(forcedText?: string) {
+    if (audio.busy) return;
     setError("");
     if (loadingInit || loadingScore) return;
     if (isRecording || isStarting || isTranscribing) return;
@@ -794,8 +760,8 @@ export default function QAPage() {
   /* =====================
      UI (mobile layout like smalltalk)
   ===================== */
-  const canSend = !loadingInit && !isDone && !loadingScore && !isRecording && !isTranscribing;
-  const micDisabled = loadingInit || isDone || loadingScore || isTranscribing || isStarting || isRecording;
+  const canSend = !audio.busy && !loadingInit && !isDone && !loadingScore && !isRecording && !isTranscribing;
+  const micDisabled = audio.busy || loadingInit || isDone || loadingScore || isTranscribing || isStarting || isRecording;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -989,6 +955,7 @@ export default function QAPage() {
   return (
     <main style={containerStyle}>
       <div style={phoneStyle}>
+        <SpeechPlaybackNotice {...audio} />
         {/* Avatar */}
         <div style={avatarWrapStyle}>
           <div style={avatarInnerStyle}>

@@ -6,8 +6,8 @@ export type TtsGender = AvatarId;
 /**
  * ✅ iOS/Safari 安定化方針
  * - Audio を毎回 new しない（単一インスタンスを使い回す）
- * - ended が来ない/無音化するケースに備えて watchdog を入れる
- * - play() が reject したら 1回だけリトライ
+ * - 再生位置が進まない場合に限りタイムアウトとして通知する
+ * - play() の失敗を呼び出し元へ伝え、ユーザー操作で再試行できるようにする
  * - URL.revokeObjectURL / srcクリア / load() で後処理を確実に
  */
 
@@ -31,17 +31,6 @@ function splitIntoChunks(text: string, maxChars = 260) {
   }
   if (rest) parts.push(rest);
   return parts;
-}
-
-function sleep(ms: number) {
-  return new Promise<void>((r) => setTimeout(r, ms));
-}
-
-function estimateChunkTimeoutMs(text: string) {
-  // ざっくり: 1秒あたり ~12 chars + バッファ
-  const n = Math.max(1, String(text ?? "").length);
-  const sec = Math.ceil(n / 12) + 6;
-  return Math.min(45_000, Math.max(8_000, sec * 1000));
 }
 
 let sharedAudio: HTMLAudioElement | null = null;
@@ -70,6 +59,20 @@ function getSharedAudio() {
 }
 
 async function fetchTtsBlob(text: string, gender: TtsGender, signal?: AbortSignal): Promise<Blob> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) controller.abort();
+  const timeout = setTimeout(cancel, 30_000);
+  try {
+    return await requestTtsBlob(text, gender, controller.signal);
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", cancel);
+  }
+}
+
+async function requestTtsBlob(text: string, gender: TtsGender, signal: AbortSignal): Promise<Blob> {
   const res = await fetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -96,111 +99,102 @@ async function fetchTtsBlob(text: string, gender: TtsGender, signal?: AbortSigna
 
 async function playBlobOnce(opts: {
   blob: Blob;
-  textForTimeout: string;
   signal?: AbortSignal;
   onStart?: () => void;
 }) {
   const a = getSharedAudio();
-  if (!a) return;
+  if (!a) throw new Error("Audio playback is unavailable");
+  if (opts.signal?.aborted) throw new DOMException("Playback cancelled", "AbortError");
 
-  const url = URL.createObjectURL(opts.blob);
+  return new Promise<void>((resolve, reject) => {
+    const url = URL.createObjectURL(opts.blob);
+    let done = false;
+    let started = false;
+    let lastPosition = 0;
+    let lastProgressAt = Date.now();
+    let watchdog: ReturnType<typeof setInterval> | undefined;
 
-  let started = false;
-  let done = false;
-
-  const enforceVol = () => {
-    try {
-      a.volume = 1.0;
-      a.muted = false;
-    } catch {}
-  };
-
-  const onPlaying = () => {
-    if (started) return;
-    started = true;
-    enforceVol();
-    opts.onStart?.();
-  };
-
-  const finish = () => {
-    if (done) return;
-    done = true;
-
-    try {
+    const finish = (error?: unknown) => {
+      if (done) return;
+      done = true;
+      clearInterval(watchdog);
       a.removeEventListener("playing", onPlaying);
-      a.removeEventListener("ended", finish);
-      a.removeEventListener("error", finish);
-      a.removeEventListener("stalled", finish);
-      a.removeEventListener("abort", finish);
-      opts.signal?.removeEventListener("abort", finish);
-    } catch {}
-
-    try {
+      a.removeEventListener("ended", onEnded);
+      a.removeEventListener("error", onError);
+      opts.signal?.removeEventListener("abort", onAbort);
       a.pause();
-    } catch {}
-    try {
-      a.currentTime = 0;
-    } catch {}
-    try {
-      a.src = "";
-      // load() で iOS の「次が鳴らない」系を潰す
+      a.removeAttribute("src");
       a.load();
-    } catch {}
-
-    try {
       URL.revokeObjectURL(url);
-    } catch {}
-  };
+      if (error) reject(error);
+      else resolve();
+    };
+    const onPlaying = () => {
+      if (started) return;
+      started = true;
+      lastProgressAt = Date.now();
+      opts.onStart?.();
+    };
+    const onEnded = () => finish();
+    const onError = () => finish(new Error(`Audio playback failed (${a.error?.code ?? "unknown"})`));
+    const onAbort = () => finish(new DOMException("Playback cancelled", "AbortError"));
 
-  const timeoutMs = estimateChunkTimeoutMs(opts.textForTimeout);
-  const watchdog = window.setTimeout(() => {
-    // ✅ endedが来ない/無音で固まるケース
-    finish();
-  }, timeoutMs);
-
-  a.addEventListener("playing", onPlaying);
-  a.addEventListener("ended", finish);
-  a.addEventListener("error", finish);
-  a.addEventListener("stalled", finish);
-  a.addEventListener("abort", finish);
-  opts.signal?.addEventListener("abort", finish, { once: true });
-  if (opts.signal?.aborted) finish();
-
-  try {
-    if (done) return;
-    enforceVol();
-    // ✅ src 差し替えは毎回 load() もセットで
-    a.src = url;
+    a.addEventListener("playing", onPlaying);
+    a.addEventListener("ended", onEnded);
+    a.addEventListener("error", onError);
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+    // A temporary stalled/waiting event is not completion. Only time out if
+    // the playback position stops advancing, including when play() never settles.
+    watchdog = setInterval(() => {
+      if (a.currentTime > lastPosition + 0.01) {
+        lastPosition = a.currentTime;
+        lastProgressAt = Date.now();
+      } else if (Date.now() - lastProgressAt >= 30_000) {
+        finish(new Error("Audio playback timed out; please tap to retry"));
+      }
+    }, 1000);
     try {
+      a.volume = 1;
+      a.muted = false;
+      a.src = url;
       a.load();
-    } catch {}
-
-    // ✅ play() reject 対策（ユーザー操作外/中断など）
-    const p = a.play();
-    if (p && typeof (p as any).catch === "function") {
-      await (p as Promise<void>).catch(() => {});
+      // Invoke synchronously so a cached retry can use the button's user gesture.
+      const playing = a.play();
+      void playing?.catch((error: unknown) => finish(error));
+    } catch (error) {
+      finish(error);
     }
+  });
+}
 
-    // ✅ 「再生できたけど playing が遅い」対策：少し待っても started しなければ一度だけ再試行
-    await sleep(250);
-    if (!started && !done) {
-      enforceVol();
+/** One utterance, with cached generated chunks and a cursor for failed playback. */
+export function createTtsPlayback(text: string, gender: TtsGender) {
+  const chunks = splitIntoChunks(text, 260);
+  const blobs = new Map<number, Blob>();
+  let nextChunk = 0;
+  let busy = false;
+  return {
+    async play(args: { signal?: AbortSignal; onStart?: () => void; onEnd?: () => void } = {}) {
+      if (busy) throw new Error("Audio is already playing");
+      busy = true;
+      if (nextChunk === chunks.length) nextChunk = 0;
       try {
-        const p2 = a.play();
-        if (p2 && typeof (p2 as any).catch === "function") {
-          await (p2 as Promise<void>).catch(() => {});
+        for (; nextChunk < chunks.length;) {
+          if (args.signal?.aborted) throw new DOMException("Playback cancelled", "AbortError");
+          let blob = blobs.get(nextChunk);
+          if (!blob) {
+            blob = await fetchTtsBlob(chunks[nextChunk], gender, args.signal);
+            blobs.set(nextChunk, blob);
+          }
+          await playBlobOnce({ blob, signal: args.signal, onStart: args.onStart });
+          nextChunk += 1;
         }
-      } catch {}
-    }
-
-    // ✅ 終了待ち（finish が呼ばれたら抜ける）
-    while (!done) {
-      await sleep(80);
-    }
-  } finally {
-    window.clearTimeout(watchdog);
-    finish();
-  }
+      } finally {
+        busy = false;
+        args.onEnd?.();
+      }
+    },
+  };
 }
 
 export async function playTtsOnce(args: {
@@ -213,37 +207,7 @@ export async function playTtsOnce(args: {
   const text = String(args.text ?? "").trim();
   if (!text) return;
 
-  const chunks = splitIntoChunks(text, 260);
-  if (!chunks.length) return;
-
-  // ✅ 途中で連打されたときの重なりを避けたい場合は
-  // ここで sharedAudio を止める（今は「無音化」回避のため強制停止）
-  const a = getSharedAudio();
-  try {
-    a?.pause();
-    if (a) a.currentTime = 0;
-  } catch {}
-
-  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-
-  try {
-    for (let i = 0; i < chunks.length; i++) {
-      if (args.signal?.aborted) return;
-      const blob = await fetchTtsBlob(chunks[i], args.gender, args.signal ?? ctrl?.signal);
-      if (args.signal?.aborted) return;
-      await playBlobOnce({
-        blob,
-        signal: args.signal,
-        textForTimeout: chunks[i],
-        onStart: i === 0 ? args.onStart : undefined,
-      });
-    }
-  } finally {
-    try {
-      ctrl?.abort();
-    } catch {}
-    args.onEnd?.();
-  }
+  await createTtsPlayback(text, args.gender).play(args);
 }
 
 export async function playTtsQueue(args: {
