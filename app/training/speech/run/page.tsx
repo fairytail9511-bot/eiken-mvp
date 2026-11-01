@@ -9,7 +9,8 @@ import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
 import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
-import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
+import { clearLocalRecordingSession, createRecordingSessionId, loadLocalRecording, saveLocalRecording } from "@/app/lib/localRecordings";
+import { loadTrainingProgress, saveTrainingProgress, type SpeechProgress } from "@/app/lib/trainingProgress";
 
 const TRAINING_AUDIO_SESSION = "training-speech-latest";
 import { consumeFreeTrainingUse, getTrainingUsage } from "@/app/lib/trainingAccess";
@@ -179,22 +180,42 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   const sp = useSearchParams();
 
   const topicFromQuery = (sp.get("topic") ?? "").toString().trim();
+  const runFromQuery = sp.get("run") ?? "";
 
   const [topic, setTopic] = useState<string>(topicFromQuery);
   const [speech, setSpeech] = useState<string>("");
   const [error, setError] = useState<string>("");
 
-  useEffect(() => {
-    void clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
-  }, []);
+  const progressRef = useRef<SpeechProgress | null>(null);
+  const mountedRef = useRef(true);
+  const startingRef = useRef(false);
+  const scoringRef = useRef(false);
+  const [restoreReady, setRestoreReady] = useState(false);
+  const [timerStarted, setTimerStarted] = useState(false);
+  const [pendingTranscription, setPendingTranscription] = useState(false);
+  const recoveringRef = useRef(false);
   const [result, setResult] = useState<SpeechTrainingResult | null>(null);
   const [trainingAccessGranted, setTrainingAccessGranted] = useState(false);
   const [accessBlocked, setAccessBlocked] = useState(false);
+  const [audioSessionId, setAudioSessionId] = useState(TRAINING_AUDIO_SESSION);
 
   const LIMIT_SEC = 120;
   const [tick, setTick] = useState(0);
   const startedAtRef = useRef<number>(Date.now());
   const trainingAccessGrantedRef = useRef(false);
+
+  function storeProgress(next: SpeechProgress) {
+    saveTrainingProgress(next);
+    progressRef.current = next;
+  }
+
+  function updateSpeech(text: string) {
+    setSpeech(text);
+    if (progressRef.current) {
+      try { storeProgress({ ...progressRef.current, speech: text }); }
+      catch { setError("Speechを保存できませんでした。端末の空き容量を確認してください。"); }
+    }
+  }
 
   const showPrepTime = useMemo(() => {
     try {
@@ -310,49 +331,117 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
 
   const didSpeakRef = useRef(false);
   useEffect(() => {
-    if (!topic) return;
     if (didSpeakRef.current) return;
-
-    const usage = getTrainingUsage();
-    if (!usage.isPro && usage.remaining <= 0) {
-      setError(`無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`);
-      setAccessBlocked(true);
+    const saved = loadTrainingProgress("speech");
+    if (saved && (!runFromQuery || saved.sourceId === runFromQuery) && (!topicFromQuery || saved.topic === topicFromQuery)) {
       didSpeakRef.current = true;
+      try {
+        if (!saved.accessGranted) {
+          const access = consumeFreeTrainingUse(saved.runId);
+          if (!access.ok) throw new Error("利用状態を復元できませんでした。");
+          saved.accessGranted = true;
+          saveTrainingProgress(saved);
+        }
+        progressRef.current = saved;
+        setAudioSessionId(saved.runId);
+        setTopic(saved.topic);
+        setSpeech(saved.speech);
+        setResult(saved.result);
+        setPendingTranscription(saved.pendingTranscription ?? false);
+        startedAtRef.current = saved.startedAt ?? Date.now();
+        setTimerStarted(saved.startedAt !== null);
+        trainingAccessGrantedRef.current = true;
+        setTrainingAccessGranted(true);
+      } catch {
+        setError("保存した練習を復元できませんでした。端末の空き容量を確認して再読み込みしてください。");
+        setAccessBlocked(true);
+      }
+      setRestoreReady(true);
       return;
     }
-
-    const access = consumeFreeTrainingUse();
-    if (!access.ok) {
-      setError(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
-      setAccessBlocked(true);
-      didSpeakRef.current = true;
-      return;
-    }
-
-    trainingAccessGrantedRef.current = true;
-    setTrainingAccessGranted(true);
+    if (!topic) return;
     didSpeakRef.current = true;
-
-    let timerId: number | null = null;
-    let cancelled = false;
-
-    (async () => {
-      await speakOnce(examinerLine);
-      if (cancelled) return;
-      startedAtRef.current = Date.now();
-      timerId = window.setInterval(() => setTick((t) => t + 1), 1000);
-    })();
-
-    return () => {
-      cancelled = true;
-      if (timerId) window.clearInterval(timerId);
-    };
+    void beginSpeech(runFromQuery || createRecordingSessionId());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topic]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  async function beginSpeech(runId: string) {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    try {
+      const usage = getTrainingUsage();
+      if (!usage.isPro && usage.remaining <= 0) {
+        setError(`無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`);
+        setAccessBlocked(true);
+        return;
+      }
+      let difficulty = "real";
+      try {
+        const settings = JSON.parse(localStorage.getItem("eiken_mvp_settings") ?? "{}");
+        if (["easy", "real", "hard"].includes(settings.difficulty)) difficulty = settings.difficulty;
+      } catch {}
+      const initial: SpeechProgress = {
+        version: 1, kind: "speech", runId, sourceId: runFromQuery || runId, difficulty, topic, speech: "",
+        startedAt: null, accessGranted: false, result: null,
+      };
+      const previousAudioId = progressRef.current?.runId ?? TRAINING_AUDIO_SESSION;
+      storeProgress(initial);
+      const access = consumeFreeTrainingUse(runId);
+      if (!access.ok) {
+        setAccessBlocked(true);
+        setError(`無料トレーニング枠（月${access.limit}回）が利用できません。`);
+        return;
+      }
+      storeProgress({ ...initial, accessGranted: true });
+      audio.reset();
+      await clearLocalRecordingSession(previousAudioId).catch(() => {});
+      if (!mountedRef.current) return;
+      setResult(null);
+      setSpeech("");
+      setPendingTranscription(false);
+      setAudioSessionId(runId);
+      setError("");
+      setTimerStarted(false);
+      setTick(0);
+      setAccessBlocked(false);
+      trainingAccessGrantedRef.current = true;
+      setTrainingAccessGranted(true);
+      setRestoreReady(true);
+      await startSpeechTimer();
+    } catch {
+      setError("練習を保存できませんでした。端末の空き容量を確認してください。");
+      setAccessBlocked(true);
+    } finally {
+      startingRef.current = false;
+      if (mountedRef.current) setRestoreReady(true);
+    }
+  }
+
+  async function startSpeechTimer() {
+    const runId = progressRef.current?.runId;
+    await speakOnce(examinerLine);
+    if (!mountedRef.current || !progressRef.current || progressRef.current.runId !== runId) return;
+    startedAtRef.current = Date.now();
+    try {
+      storeProgress({ ...progressRef.current, startedAt: startedAtRef.current });
+      setTimerStarted(true);
+    } catch { setError("タイマーの状態を保存できませんでした。"); }
+  }
+
+  useEffect(() => {
+    if (!restoreReady || !timerStarted || result) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [restoreReady, timerStarted, result]);
+
   const elapsedSec = useMemo(() => {
-    return Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000));
-  }, [tick]);
+    return timerStarted ? Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000)) : 0;
+  }, [tick, timerStarted]);
 
   const timerText = useMemo(() => {
     if (elapsedSec <= LIMIT_SEC) {
@@ -364,6 +453,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   }, [elapsedSec]);
 
   async function startRecording() {
+    if (!timerStarted) return;
     if (audio.busy) return;
     setError("");
     if (!trainingAccessGrantedRef.current || accessBlocked) return;
@@ -394,6 +484,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
       };
 
       recorder.onstop = async () => {
+        if (!mountedRef.current) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -408,7 +499,12 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
           chunksRef.current = [];
 
           try {
-            await saveLocalRecording(TRAINING_AUDIO_SESSION, "speech", blob);
+            await saveLocalRecording(audioSessionId, "speech", blob);
+            if (!mountedRef.current || progressRef.current?.runId !== audioSessionId) return;
+            if (progressRef.current) {
+              storeProgress({ ...progressRef.current, pendingTranscription: true });
+              setPendingTranscription(true);
+            }
           } catch {}
 
           const fd = new FormData();
@@ -423,10 +519,13 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No transcription returned");
 
-          const current = (speech ?? "").trim();
+          if (!mountedRef.current || progressRef.current?.runId !== audioSessionId) return;
+          const current = (progressRef.current.speech ?? "").trim();
           const merged = !current ? text : current.endsWith(" ") ? current + text : current + " " + text;
 
+          storeProgress({ ...progressRef.current, speech: merged, pendingTranscription: false });
           setSpeech(merged);
+          setPendingTranscription(false);
 
           if (autoSubmitAfterStopRef.current) {
             autoSubmitAfterStopRef.current = false;
@@ -474,6 +573,7 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
   }
 
   async function submitSpeech(speechOverride?: string) {
+    if (scoringRef.current) return;
     setError("");
     if (!trainingAccessGrantedRef.current || accessBlocked) {
       setError("無料トレーニング枠が利用できません。");
@@ -493,8 +593,12 @@ function pickSpeechFeedback(payload: any): SpeechFeedback | null {
     }
 
     setIsScoring(true);
+    scoringRef.current = true;
+    const runId = progressRef.current?.runId;
 
     try {
+      if (!progressRef.current) throw new Error("練習データがありません。");
+      storeProgress({ ...progressRef.current, speech: s });
       const transcript = `TOPIC: ${t}\n\nSPEECH:\n${s}\n\nQ&A:\n`;
 
       const [detailRes, improveRes] = await Promise.all([
@@ -538,7 +642,7 @@ const durationSec = Math.max(
 
 const score = buildSpeechScore(s, blocks, feedback);
 
-      setResult({
+      const completed: SpeechTrainingResult = {
         topic: t,
         speech: s,
         finishedAt: new Date().toISOString(),
@@ -547,33 +651,46 @@ const score = buildSpeechScore(s, blocks, feedback);
         summary,
         blocks,
         feedback,
-      });
+      };
+      if (!mountedRef.current || !progressRef.current || progressRef.current.runId !== runId) return;
+      storeProgress({ ...progressRef.current, speech: s, result: completed });
+      setResult(completed);
     } catch (e: any) {
       setError(e?.message ?? "Speechトレーニングの採点に失敗しました。");
     } finally {
+      scoringRef.current = false;
       setIsScoring(false);
     }
   }
 
-  function onRetrySameTopic() {
-    audio.reset();
-    void clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
-    const access = consumeFreeTrainingUse();
-    if (!access.ok) {
-      setError(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
-      setAccessBlocked(true);
-      return;
-    }
-
-    trainingAccessGrantedRef.current = true;
-    setTrainingAccessGranted(true);
-    setResult(null);
+  async function recoverRecordedSpeech() {
+    const saved = progressRef.current;
+    if (!saved || !saved.pendingTranscription || recoveringRef.current || isTranscribing || audio.busy) return;
+    recoveringRef.current = true;
+    setIsTranscribing(true);
     setError("");
-    setSpeech("");
-    setTick(0);
-    startedAtRef.current = Date.now();
-    didSpeakRef.current = false;
-    void speakOnce(examinerLine);
+    try {
+      const blob = await loadLocalRecording(saved.runId, "speech");
+      if (!blob) throw new Error("保存した録音が見つかりません。もう一度録音してください。");
+      const fd = new FormData();
+      fd.append("file", blob, `speech.${extFromMime(blob.type)}`);
+      fd.append("language", "en");
+      const response = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await response.json();
+      if (!response.ok || !String(data?.text ?? "").trim()) throw new Error("文字起こしに失敗しました。再試行できます。");
+      if (!mountedRef.current || progressRef.current?.runId !== saved.runId) return;
+      const previous = progressRef.current.speech.trim();
+      const text = String(data.text).trim();
+      const merged = previous ? `${previous} ${text}` : text;
+      storeProgress({ ...progressRef.current, speech: merged, pendingTranscription: false });
+      setSpeech(merged);
+      setPendingTranscription(false);
+    } catch (error) { if (mountedRef.current) setError(error instanceof Error ? error.message : "録音を復元できませんでした。"); }
+    finally { recoveringRef.current = false; if (mountedRef.current) setIsTranscribing(false); }
+  }
+
+  function onRetrySameTopic() {
+    void beginSpeech(createRecordingSessionId());
   }
 
   function onBackToTrainingTop() {
@@ -589,7 +706,7 @@ const score = buildSpeechScore(s, blocks, feedback);
     router.push("/");
   }
 
-  const canSubmit = !audio.busy && trainingAccessGranted && !accessBlocked && !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
+  const canSubmit = timerStarted && !audio.busy && trainingAccessGranted && !accessBlocked && !isStarting && !isTranscribing && !isScoring && (speech ?? "").trim().length > 0 && !result;
 
   const gold = "rgba(234, 179, 8, 0.60)";
   const goldSoft = "rgba(234, 179, 8, 0.22)";
@@ -723,11 +840,21 @@ const score = buildSpeechScore(s, blocks, feedback);
     cursor: "pointer",
   };
 
+  if (!restoreReady) return <main style={pageStyle}><div style={{ color: "#fff", padding: 20 }}>練習を確認中…</div></main>;
+
   return (
     <main style={pageStyle}>
       <div style={shellStyle}>
         <div style={topStyle}>
           <SpeechPlaybackNotice {...audio} />
+          {pendingTranscription && !result ? (
+            <button type="button" onClick={() => void recoverRecordedSpeech()} disabled={isRecording || isTranscribing || audio.busy} style={creamBtn}>
+              保存した録音からSpeechを復元
+            </button>
+          ) : null}
+          {!result && trainingAccessGranted && !timerStarted && !audio.busy && !audio.error ? (
+            <button type="button" onClick={() => void startSpeechTimer()} style={creamBtn}>案内を再生して練習を再開</button>
+          ) : null}
           <div style={avatarWrapStyle}>
             <div style={avatarBoxStyle}>
               <Image
@@ -789,7 +916,7 @@ const score = buildSpeechScore(s, blocks, feedback);
                     type="button"
                     onClick={startRecording}
                     style={micBtnStyle}
-                    disabled={audio.busy || !trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || isScoring || !!result}
+                    disabled={!timerStarted || audio.busy || !trainingAccessGranted || accessBlocked || isTranscribing || isStarting || isRecording || isScoring || !!result}
                   >
                     🎤 Mic
                   </button>
@@ -817,7 +944,7 @@ const score = buildSpeechScore(s, blocks, feedback);
                   <textarea
                     rows={10}
                     value={speech}
-                    onChange={(e) => setSpeech(e.target.value)}
+                    onChange={(e) => updateSpeech(e.target.value)}
                     placeholder="Type your speech here..."
                     disabled={isTranscribing || isScoring}
                     style={{
@@ -890,7 +1017,7 @@ const score = buildSpeechScore(s, blocks, feedback);
               <div style={resultCard}>
                 <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 8 }}>自分の録音音声</div>
                 <LocalRecordingPlayer
-                  sessionId={TRAINING_AUDIO_SESSION}
+                  sessionId={audioSessionId}
                   part="speech"
                   label="今回のスピーチ"
                 />

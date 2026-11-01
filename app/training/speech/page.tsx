@@ -10,6 +10,8 @@ import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import TrainingThemeSelector, { type TrainingThemeSelection } from "@/app/components/TrainingThemeSelector";
 import { getTrainingTheme } from "@/app/lib/trainingThemes";
+import { createRecordingSessionId } from "@/app/lib/localRecordings";
+import { loadTrainingProgress, saveTrainingProgress, clearTrainingProgress, type TopicProgress, type SpeechProgress } from "@/app/lib/trainingProgress";
 
 // ====== training localStorage keys ======
 const TRAINING_KEYS = {
@@ -42,7 +44,8 @@ export default function TrainingSpeechTopicPage() {
 
   const PREP_SECONDS = 60;
 
-  const difficulty = useMemo(() => {
+  const [restoredDifficulty, setRestoredDifficulty] = useState<string | null>(null);
+  const configuredDifficulty = useMemo(() => {
     if (typeof window === "undefined") return "real";
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
@@ -53,6 +56,7 @@ export default function TrainingSpeechTopicPage() {
       return "real";
     }
   }, []);
+  const difficulty = restoredDifficulty ?? configuredDifficulty;
 
   const showTranscript = useMemo(() => {
     if (typeof window === "undefined") return true;
@@ -115,6 +119,58 @@ export default function TrainingSpeechTopicPage() {
   const [prepStarted, setPrepStarted] = useState(false);
   const didStartPrepRef = useRef(false);
   const didAskSpeakRef = useRef(false);
+  const progressRef = useRef<TopicProgress | null>(null);
+  const prepEndsAtRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+  const [restoreReady, setRestoreReady] = useState(false);
+  const [previousSpeech, setPreviousSpeech] = useState<SpeechProgress | null>(null);
+
+  function storeProgress(next: TopicProgress) {
+    saveTrainingProgress(next);
+    progressRef.current = next;
+  }
+
+  function installTopics(topics: string[]) {
+    if (!themeSelection || !mountedRef.current) return;
+    storeProgress({
+      version: 1, kind: "speech-topic", runId: createRecordingSessionId(), difficulty,
+      selection: themeSelection, topics, selectedIndex: 0, answer: "", prepEndsAt: null, phase: "prep",
+    });
+    setTopicTexts(topics);
+    setSelectedIndex(0);
+  }
+
+  function updateAnswer(text: string) {
+    setAnswer(text);
+    if (progressRef.current) {
+      try { storeProgress({ ...progressRef.current, answer: text }); }
+      catch { setError("入力内容を保存できませんでした。"); }
+    }
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const saved = loadTrainingProgress("speech-topic");
+    setPreviousSpeech(loadTrainingProgress("speech"));
+    if (saved) {
+      progressRef.current = saved;
+      didFetchTopicsRef.current = true;
+      didStartPrepRef.current = true;
+      didAskSpeakRef.current = true;
+      prepEndsAtRef.current = saved.prepEndsAt;
+      setRestoredDifficulty(saved.difficulty);
+      setThemeSelection(saved.selection);
+      setTopicTexts(saved.topics);
+      setSelectedIndex(saved.selectedIndex);
+      setAnswer(saved.answer);
+      const left = saved.prepEndsAt == null ? PREP_SECONDS : Math.max(0, Math.ceil((saved.prepEndsAt - Date.now()) / 1000));
+      setSecondsLeft(left);
+      setPhase(saved.phase === "ask" || left === 0 ? "ask" : "prep");
+      setPrepStarted(saved.prepEndsAt !== null);
+    }
+    setRestoreReady(true);
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const [isMouthOpen, setIsMouthOpen] = useState(false);
   const mouthTimerRef = useRef<number | null>(null);
@@ -190,7 +246,7 @@ export default function TrainingSpeechTopicPage() {
 
   const didFetchTopicsRef = useRef(false);
   useEffect(() => {
-    if (!themeSelection) return;
+    if (!restoreReady || !themeSelection) return;
     if (didFetchTopicsRef.current) return;
     didFetchTopicsRef.current = true;
 
@@ -200,8 +256,7 @@ export default function TrainingSpeechTopicPage() {
 
       try {
         if (themeSelection.mode === "fixed" && themeSelection.fixedTopic) {
-          setTopicTexts([themeSelection.fixedTopic]);
-          setSelectedIndex(0);
+          installTopics([themeSelection.fixedTopic]);
           setUsedFallback(false);
           return;
         }
@@ -218,20 +273,31 @@ export default function TrainingSpeechTopicPage() {
 
         if (cleaned.length !== 5) throw new Error("Topic questions are invalid (need exactly 5)");
 
-        setTopicTexts(cleaned);
-        setSelectedIndex(0);
+        installTopics(cleaned);
         setUsedFallback(false);
       } catch (e: any) {
         const themedFallback = getTrainingTheme(themeSelection.themeId).fixedTopics;
-        setTopicTexts(themedFallback.length ? themedFallback : FALLBACK_TOPICS);
-        setSelectedIndex(0);
+        try { installTopics(themedFallback.length ? themedFallback : FALLBACK_TOPICS); }
+        catch { setError("お題を保存できませんでした。端末の空き容量を確認してください。"); return; }
         setError(e?.message ?? "Failed to load topics. Using fallback topics.");
         setUsedFallback(true);
       } finally {
         setLoadingTopics(false);
       }
     })();
-  }, [difficulty, themeSelection]);
+  }, [difficulty, themeSelection, restoreReady]);
+
+  async function startPreparation() {
+    const runId = progressRef.current?.runId;
+    await speakAsync(examinerIntro);
+    if (!mountedRef.current || !progressRef.current || progressRef.current.runId !== runId) return;
+    const prepEndsAt = Date.now() + PREP_SECONDS * 1000;
+    try {
+      storeProgress({ ...progressRef.current, prepEndsAt });
+      prepEndsAtRef.current = prepEndsAt;
+      setPrepStarted(true);
+    } catch { setError("準備時間を保存できませんでした。"); }
+  }
 
   useEffect(() => {
     if (!topicTexts) return;
@@ -245,9 +311,7 @@ export default function TrainingSpeechTopicPage() {
       setPhase("prep");
       setSecondsLeft(PREP_SECONDS);
 
-      await speakAsync(examinerIntro);
-      if (cancelled) return;
-      setPrepStarted(true);
+      if (!cancelled) await startPreparation();
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -258,7 +322,9 @@ export default function TrainingSpeechTopicPage() {
     if (!prepStarted) return;
 
     const timer = window.setInterval(() => {
-      setSecondsLeft((s) => (s > 0 ? s - 1 : 0));
+      if (prepEndsAtRef.current !== null) {
+        setSecondsLeft(Math.max(0, Math.ceil((prepEndsAtRef.current - Date.now()) / 1000)));
+      }
     }, 1000);
 
     return () => window.clearInterval(timer);
@@ -270,6 +336,10 @@ export default function TrainingSpeechTopicPage() {
     if (secondsLeft !== 0) return;
 
     setPhase("ask");
+    if (progressRef.current) {
+      try { storeProgress({ ...progressRef.current, phase: "ask" }); }
+      catch { setError("準備状態を保存できませんでした。"); }
+    }
     if (!didAskSpeakRef.current) {
       didAskSpeakRef.current = true;
       speak(examinerAsk);
@@ -318,6 +388,7 @@ export default function TrainingSpeechTopicPage() {
       };
 
       recorder.onstop = async () => {
+        if (!mountedRef.current) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -340,12 +411,10 @@ export default function TrainingSpeechTopicPage() {
 
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No transcription returned");
+          if (!mountedRef.current) return;
 
-          setAnswer((prev) => {
-            const p = prev ?? "";
-            if (!p.trim()) return text;
-            return p.endsWith(" ") ? p + text : p + " " + text;
-          });
+          const p = progressRef.current?.answer ?? answer;
+          updateAnswer(!p.trim() ? text : p.endsWith(" ") ? p + text : p + " " + text);
 
           if (autoSubmitAfterStopRef.current) {
             autoSubmitAfterStopRef.current = false;
@@ -401,6 +470,7 @@ export default function TrainingSpeechTopicPage() {
       return;
     }
 
+    const runId = createRecordingSessionId();
     try {
       localStorage.setItem(TRAINING_KEYS.SELECTED_TOPIC, chosenTopic);
       localStorage.setItem(
@@ -417,11 +487,16 @@ export default function TrainingSpeechTopicPage() {
           topic: chosenTopic,
           difficulty,
           createdAt: new Date().toISOString(),
+          runId,
         })
       );
-    } catch {}
+      clearTrainingProgress("speech-topic");
+    } catch {
+      setError("練習データを保存できませんでした。");
+      return;
+    }
 
-    router.push(`/training/speech/run?topic=${encodeURIComponent(chosenTopic)}`);
+    router.push(`/training/speech/run?topic=${encodeURIComponent(chosenTopic)}&run=${encodeURIComponent(runId)}`);
   }
 
   const canSubmit = !audio.busy && phase === "ask" && !!selectedTopicText && !isTranscribing && !isStarting;
@@ -499,10 +574,17 @@ export default function TrainingSpeechTopicPage() {
     router.push("/");
   }
 
+  if (!restoreReady) return <main style={pageBg}><div style={{ color: "#fff" }}>練習を確認中…</div></main>;
+
   if (!themeSelection) {
     return (
       <main style={{ ...pageBg, alignItems: "center" }}>
-        <TrainingThemeSelector title="Speechトレーニング" onStart={setThemeSelection} />
+        <div style={{ width: "100%", maxWidth: 520, display: "grid", gap: 12 }}>
+          {previousSpeech ? <button type="button" style={listButtonBase} onClick={() => {
+            router.push(`/training/speech/run?topic=${encodeURIComponent(previousSpeech.topic)}&run=${encodeURIComponent(previousSpeech.sourceId)}`);
+          }}>前回の練習・結果を開く</button> : null}
+          <TrainingThemeSelector title="Speechトレーニング" onStart={setThemeSelection} />
+        </div>
       </main>
     );
   }
@@ -511,6 +593,25 @@ export default function TrainingSpeechTopicPage() {
     <main style={pageBg}>
       <div style={cardWrap}>
         <SpeechPlaybackNotice {...audio} />
+        {!prepStarted && !audio.busy && !audio.error && topicTexts ? (
+          <button type="button" onClick={() => void startPreparation()} style={listButtonBase}>案内を再生して準備を再開</button>
+        ) : null}
+        <button type="button" disabled={loadingTopics || isRecording || isStarting || isTranscribing} style={listButtonBase} onClick={() => {
+          clearTrainingProgress("speech-topic");
+          progressRef.current = null;
+          prepEndsAtRef.current = null;
+          didFetchTopicsRef.current = false;
+          didStartPrepRef.current = false;
+          didAskSpeakRef.current = false;
+          audio.reset();
+          setTopicTexts(null);
+          setThemeSelection(null);
+          setRestoredDifficulty(null);
+          setAnswer("");
+          setPrepStarted(false);
+          setPhase("prep");
+          setSecondsLeft(PREP_SECONDS);
+        }}>テーマを選び直す</button>
         {/* ===== Top fixed avatar ===== */}
         <div
           style={{
@@ -640,7 +741,13 @@ export default function TrainingSpeechTopicPage() {
                   <button
                     key={`${idx}-${text}`}
                     type="button"
-                    onClick={() => setSelectedIndex(idx)}
+                    onClick={() => {
+                      if (progressRef.current) {
+                        try { storeProgress({ ...progressRef.current, selectedIndex: idx }); }
+                        catch { setError("選択を保存できませんでした。"); return; }
+                      }
+                      setSelectedIndex(idx);
+                    }}
                     style={{
                       ...listButtonBase,
                       background: selected ? selectedButtonBg : listButtonBase.background,
@@ -760,7 +867,7 @@ export default function TrainingSpeechTopicPage() {
                 <textarea
                   rows={1}
                   value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
+                  onChange={(e) => updateAnswer(e.target.value)}
                   placeholder='(Optional) e.g., "I chose topic three."'
                   disabled={isTranscribing}
                   style={{

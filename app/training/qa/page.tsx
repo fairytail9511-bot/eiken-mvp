@@ -9,7 +9,8 @@ import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
 import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
-import { clearLocalRecordingSession, saveLocalRecording } from "@/app/lib/localRecordings";
+import { clearLocalRecordingSession, createRecordingSessionId, loadLocalRecording, saveLocalRecording } from "@/app/lib/localRecordings";
+import { loadTrainingProgress, saveTrainingProgress, type QAProgress } from "@/app/lib/trainingProgress";
 import TrainingThemeSelector, { type TrainingThemeSelection } from "@/app/components/TrainingThemeSelector";
 import { getTrainingTheme } from "@/app/lib/trainingThemes";
 
@@ -201,8 +202,9 @@ function parseTopicResponse(data: any) {
 
 export default function TrainingQAPage() {
   const router = useRouter();
+  const [restoredDifficulty, setRestoredDifficulty] = useState<string | null>(null);
 
-  const difficulty = useMemo(() => {
+  const configuredDifficulty = useMemo(() => {
     if (typeof window === "undefined") return "real";
     try {
       const raw = localStorage.getItem("eiken_mvp_settings");
@@ -213,6 +215,7 @@ export default function TrainingQAPage() {
       return "real";
     }
   }, []);
+  const difficulty = restoredDifficulty ?? configuredDifficulty;
 
   const avatarGender = useMemo(() => {
     if (typeof window === "undefined") return "female";
@@ -253,12 +256,64 @@ export default function TrainingQAPage() {
   const [loadingScore, setLoadingScore] = useState(false);
   const [result, setResult] = useState<TrainingQAResult | null>(null);
   const [accessBlocked, setAccessBlocked] = useState(false);
+  const [audioSessionId, setAudioSessionId] = useState(TRAINING_AUDIO_SESSION);
 
   const isDone = useMemo(() => qIndex >= 4, [qIndex]);
 
   const qaAnalysisRef = useRef<QAAnalysisItem[]>([]);
   const startedAtRef = useRef<number>(Date.now());
   const didInitRef = useRef(false);
+  const progressRef = useRef<QAProgress | null>(null);
+  const initBusyRef = useRef(false);
+  const mountedRef = useRef(true);
+  const [restoreReady, setRestoreReady] = useState(false);
+  const [wasRestored, setWasRestored] = useState(false);
+  const [pendingTranscription, setPendingTranscription] = useState(false);
+  const scoringRef = useRef(false);
+  const recoveringRef = useRef(false);
+
+  function storeProgress(next: QAProgress) {
+    saveTrainingProgress(next);
+    progressRef.current = next;
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const saved = loadTrainingProgress("qa");
+    if (saved) {
+      didInitRef.current = true;
+      setThemeSelection(saved.selection);
+      try {
+        if (!saved.accessGranted) {
+          const access = consumeFreeTrainingUse(saved.runId);
+          if (!access.ok) throw new Error("練習の利用状態を復元できませんでした。");
+          saved.accessGranted = true;
+          saveTrainingProgress(saved);
+        }
+        progressRef.current = saved;
+        setAudioSessionId(saved.runId);
+        setRestoredDifficulty(saved.difficulty);
+        setTopic(saved.topic);
+        setQuestions(saved.questions);
+        setQIndex(saved.qIndex);
+        setMsgs(saved.msgs);
+        setInput(saved.input);
+        setResult(saved.result);
+        qaAnalysisRef.current = saved.analysis;
+        startedAtRef.current = saved.startedAt;
+        lastSpokenRef.current = [...saved.msgs].reverse().find((m) => m.role === "examiner")?.text ?? "";
+        setLoadingInit(false);
+        setWasRestored(true);
+        setPendingTranscription(saved.pendingTranscription ?? false);
+      } catch {
+        setError("保存した練習を復元できませんでした。端末の空き容量を確認して再読み込みしてください。");
+        setLoadingInit(false);
+        setAccessBlocked(true);
+      }
+    }
+    setRestoreReady(true);
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const [isMouthOpen, setIsMouthOpen] = useState(false);
   const mouthTimerRef = useRef<number | null>(null);
@@ -386,6 +441,7 @@ export default function TrainingQAPage() {
       };
 
       mr.onstop = async () => {
+        if (!mountedRef.current) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -399,7 +455,12 @@ export default function TrainingQAPage() {
 
           if (qIndex >= 0 && qIndex <= 3) {
             try {
-              await saveLocalRecording(TRAINING_AUDIO_SESSION, `qa-${qIndex}`, blob);
+              await saveLocalRecording(audioSessionId, `qa-${qIndex}`, blob);
+              if (!mountedRef.current || progressRef.current?.runId !== audioSessionId) return;
+              if (progressRef.current) {
+                storeProgress({ ...progressRef.current, pendingTranscription: true });
+                setPendingTranscription(true);
+              }
             } catch {}
           }
 
@@ -415,7 +476,8 @@ export default function TrainingQAPage() {
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No text returned from transcription");
 
-          sendAnswer(text);
+          if (!mountedRef.current || progressRef.current?.runId !== audioSessionId) return;
+          sendAnswer(text, true);
         } catch (e: any) {
           setError(e?.message ?? "Transcription error");
         } finally {
@@ -465,9 +527,9 @@ export default function TrainingQAPage() {
   }
 
   async function initTrainingQa() {
-    if (!themeSelection) return;
+    if (!themeSelection || initBusyRef.current) return;
+    initBusyRef.current = true;
     audio.reset();
-    await clearLocalRecordingSession(TRAINING_AUDIO_SESSION).catch(() => {});
     setLoadingInit(true);
     setError("");
     startedAtRef.current = Date.now();
@@ -526,55 +588,64 @@ export default function TrainingQAPage() {
 
       if (cleaned.length !== 4) throw new Error("Q&A questions are invalid (need exactly 4)");
 
-      const access = consumeFreeTrainingUse();
+      if (!mountedRef.current) return;
+      const intro = `We will do topic Q&A training. The topic is: ${trainingTopic}`;
+      const firstQ = cleaned[0];
+      const initial: QAProgress = {
+        version: 1, kind: "qa", runId: createRecordingSessionId(), difficulty,
+        selection: themeSelection, topic: trainingTopic, questions: cleaned, qIndex: 0,
+        msgs: [{ role: "examiner", text: intro }, { role: "examiner", text: firstQ }],
+        input: "", analysis: [], startedAt: Date.now(), accessGranted: false, result: null,
+      };
+      const previousAudioId = progressRef.current?.runId ?? TRAINING_AUDIO_SESSION;
+      storeProgress(initial);
+      const access = consumeFreeTrainingUse(initial.runId);
       if (!access.ok) {
         setAccessBlocked(true);
         throw new Error(`無料トレーニング枠（月${access.limit}回）に達しました。続きは有料プランで解放されます。`);
       }
-
+      storeProgress({ ...initial, accessGranted: true });
+      startedAtRef.current = initial.startedAt;
+      await clearLocalRecordingSession(previousAudioId).catch(() => {});
+      if (!mountedRef.current) return;
       setQuestions(cleaned);
-
-      const intro = `We will do topic Q&A training. The topic is: ${trainingTopic}`;
-      const firstQ = cleaned[0];
-
-      setMsgs([
-        { role: "examiner", text: intro },
-        { role: "examiner", text: firstQ },
-      ]);
+      setAudioSessionId(initial.runId);
+      setPendingTranscription(false);
+      setMsgs(initial.msgs);
       setQIndex(0);
 
       void speakQueue([intro, firstQ]);
     } catch (e: any) {
       setError(e?.message ?? "Error");
     } finally {
-      setLoadingInit(false);
+      initBusyRef.current = false;
+      if (mountedRef.current) setLoadingInit(false);
     }
   }
 
   useEffect(() => {
-    if (!themeSelection) return;
+    if (!restoreReady || !themeSelection) return;
     if (didInitRef.current) return;
     didInitRef.current = true;
     void initTrainingQa();
-  }, [difficulty, themeSelection]);
+  }, [difficulty, themeSelection, restoreReady]);
 
-  function pushMsg(role: Msg["role"], text: string) {
-    setMsgs((prev) => [...prev, { role, text }]);
-  }
-
-  function sendAnswer(forcedText?: string) {
+  function sendAnswer(forcedText?: string, fromRecording = false) {
     if (audio.busy) return;
     setError("");
     if (accessBlocked) return;
     if (loadingInit || loadingScore || result) return;
-    if (isRecording || isStarting || isTranscribing) return;
+    if (isRecording || isStarting || (isTranscribing && !fromRecording)) return;
 
     const text = (forcedText ?? input).trim();
     if (!text) return;
 
-    const currentQText = qIndex >= 0 && qIndex <= 3 ? String(questions[qIndex] ?? "") : "";
+    const saved = progressRef.current;
+    if (!saved || saved.qIndex >= 4 || saved.qIndex !== qIndex) return;
+    const currentQText = String(saved.questions[saved.qIndex] ?? "");
+    const nextAnalysis = [...saved.analysis];
     if (qIndex >= 0 && qIndex <= 3 && currentQText) {
-      qaAnalysisRef.current.push({
+      nextAnalysis.push({
         questionIndex: qIndex,
         questionText: currentQText,
         answerText: text,
@@ -585,20 +656,42 @@ export default function TrainingQAPage() {
       });
     }
 
-    pushMsg("user", text);
-    setInput("");
-
     const next = qIndex + 1;
-
-    if (next <= 3) {
-      const nextQ = String(questions[next] ?? "").trim();
-      if (nextQ) pushMsg("examiner", nextQ);
-      setQIndex(next);
+    const nextMsgs: Msg[] = [...saved.msgs, { role: "user", text }, {
+      role: "examiner", text: next <= 3 ? saved.questions[next] : "Thank you. This concludes the Q&A training.",
+    }];
+    try {
+      storeProgress({ ...saved, analysis: nextAnalysis, msgs: nextMsgs, qIndex: next, input: "", pendingTranscription: false });
+    } catch {
+      setError("回答を保存できませんでした。端末の空き容量を確認してください。");
       return;
     }
+    qaAnalysisRef.current = nextAnalysis;
+    setMsgs(nextMsgs);
+    setInput("");
+    setQIndex(next);
+    setPendingTranscription(false);
+  }
 
-    pushMsg("examiner", "Thank you. This concludes the Q&A training.");
-    setQIndex(4);
+  async function recoverRecordedAnswer() {
+    const saved = progressRef.current;
+    if (!saved || !saved.pendingTranscription || saved.qIndex >= 4 || recoveringRef.current || isTranscribing || audio.busy) return;
+    recoveringRef.current = true;
+    setIsTranscribing(true);
+    setError("");
+    try {
+      const blob = await loadLocalRecording(saved.runId, `qa-${saved.qIndex}`);
+      if (!blob) throw new Error("保存した録音が見つかりません。もう一度回答してください。");
+      const fd = new FormData();
+      fd.append("file", blob, `answer.${extFromMime(blob.type)}`);
+      fd.append("language", "en");
+      const response = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await response.json();
+      if (!response.ok || !String(data?.text ?? "").trim()) throw new Error("文字起こしに失敗しました。再試行できます。");
+      if (!mountedRef.current || progressRef.current?.runId !== saved.runId || progressRef.current.qIndex !== saved.qIndex) return;
+      sendAnswer(String(data.text).trim(), true);
+    } catch (error) { if (mountedRef.current) setError(error instanceof Error ? error.message : "録音を復元できませんでした。"); }
+    finally { recoveringRef.current = false; if (mountedRef.current) setIsTranscribing(false); }
   }
 
   async function fetchImprovementExample(args: {
@@ -620,6 +713,7 @@ export default function TrainingQAPage() {
   }
 
   async function goToScore() {
+    if (scoringRef.current || result) return;
     setError("");
     if (accessBlocked) return;
     if (!topic) {
@@ -628,6 +722,8 @@ export default function TrainingQAPage() {
     }
 
     setLoadingScore(true);
+    scoringRef.current = true;
+    const runId = progressRef.current?.runId;
 
     try {
       const transcriptLines: string[] = [];
@@ -685,7 +781,7 @@ export default function TrainingQAPage() {
       const score = buildQaScore(msgs, interactionBlocks, enrichedQaAnalysis);
       const durationSec = Math.max(1, Math.floor((Date.now() - startedAtRef.current) / 1000));
 
-      setResult({
+      const completed: TrainingQAResult = {
         topic,
         finishedAt: new Date().toISOString(),
         difficulty,
@@ -695,10 +791,14 @@ export default function TrainingQAPage() {
         blocks: interactionBlocks,
         qaAnalysis: enrichedQaAnalysis,
         logs: msgs,
-      });
+      };
+      if (!mountedRef.current || !progressRef.current || progressRef.current.runId !== runId) return;
+      storeProgress({ ...progressRef.current, result: completed, analysis: enrichedQaAnalysis });
+      setResult(completed);
     } catch (e: any) {
       setError(e?.message ?? "Error");
     } finally {
+      scoringRef.current = false;
       setLoadingScore(false);
     }
   }
@@ -901,6 +1001,8 @@ export default function TrainingQAPage() {
     router.push("/");
   }
 
+  if (!restoreReady) return <main style={containerStyle}><div style={{ color: "#fff" }}>練習を確認中…</div></main>;
+
   if (!themeSelection) {
     return (
       <main style={{ ...containerStyle, alignItems: "center" }}>
@@ -913,6 +1015,14 @@ export default function TrainingQAPage() {
     <main style={containerStyle}>
       <div style={phoneStyle}>
         <SpeechPlaybackNotice {...audio} />
+        <button type="button" disabled={loadingInit || loadingScore || isRecording || isStarting || isTranscribing}
+          style={{ ...sendBtn, background: "rgba(255,255,255,0.08)" }} onClick={() => {
+            audio.reset();
+            didInitRef.current = false;
+            setThemeSelection(null);
+            setRestoredDifficulty(null);
+            setWasRestored(false);
+          }}>別のテーマで新しい練習</button>
         <div style={avatarWrapStyle}>
           <div style={avatarInnerStyle}>
             <Image
@@ -976,6 +1086,16 @@ export default function TrainingQAPage() {
         </div>
 
         <div style={controlsStyle}>
+          {pendingTranscription && !result ? (
+            <button type="button" disabled={isRecording || isTranscribing || audio.busy} style={sendBtn} onClick={() => void recoverRecordedAnswer()}>
+              保存した録音から回答を復元
+            </button>
+          ) : null}
+          {wasRestored && !result && qIndex >= 0 && qIndex < 4 ? (
+            <button type="button" onClick={() => void speakNow(questions[qIndex])} disabled={audio.busy} style={sendBtn}>
+              現在の質問を再生
+            </button>
+          ) : null}
           {!result ? (
             <>
               <div style={{ color: "#fff", fontSize: 22, fontWeight: 900, textAlign: "center" }}>
@@ -1052,7 +1172,14 @@ export default function TrainingQAPage() {
                       <textarea
                         rows={1}
                         value={input}
-                        onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => {
+                      const text = e.target.value;
+                      setInput(text);
+                      if (progressRef.current) {
+                        try { storeProgress({ ...progressRef.current, input: text }); }
+                        catch { setError("入力内容を保存できませんでした。"); }
+                      }
+                    }}
                         placeholder="Type your answer here..."
                         disabled={loadingScore || isTranscribing}
                         style={{
@@ -1123,7 +1250,7 @@ export default function TrainingQAPage() {
                   {[0, 1, 2, 3].map((index) => (
                     <LocalRecordingPlayer
                       key={index}
-                      sessionId={TRAINING_AUDIO_SESSION}
+                      sessionId={audioSessionId}
                       part={`qa-${index}`}
                       label={`Q&A ${index + 1}`}
                     />
