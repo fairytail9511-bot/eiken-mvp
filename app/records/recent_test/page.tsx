@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { deleteProRecord, loadRecordsForDisplay, recordSessionKey } from "@/app/lib/recordStore";
 
 type Msg = { role: "examiner" | "user"; text: string };
 
@@ -65,6 +66,7 @@ type SessionData = {
 };
 
 type SavedRecord = {
+  storageKind?: "pro" | "free";
   id: string;
   savedAt: string;
   topic: string;
@@ -82,7 +84,6 @@ type SavedRecord = {
 
 const LS_KEYS = {
   LAST_SESSION: "eiken_mvp_lastSession",
-  PRO_RECORDS: "eiken_mvp_recentRecords",
   FREE_RECORDS: "speaking_recent_records_free",
   IS_PRO: "speaking_is_pro",
 } as const;
@@ -142,9 +143,7 @@ function dedupeRecords(records: SavedRecord[]) {
   const result: SavedRecord[] = [];
 
   for (const r of records) {
-    const key =
-      `${r.session?.finishedAt ?? ""}__${r.topic ?? ""}__${r.total ?? ""}__` +
-      `${r.breakdown?.short_speech ?? ""}_${r.breakdown?.interaction ?? ""}_${r.breakdown?.grammar_vocab ?? ""}_${r.breakdown?.pronunciation_fluency ?? ""}`;
+    const key = recordSessionKey(r.session, r.id);
 
     if (seen.has(key)) continue;
     seen.add(key);
@@ -160,43 +159,61 @@ export default function RecentTestPage() {
   const [isPro, setIsPro] = useState(false);
   const [records, setRecords] = useState<SavedRecord[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [readOnly, setReadOnly] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const [visibleCount, setVisibleCount] = useState(20);
 
   useEffect(() => {
-    try {
-      const pro = getIsPro();
-      setIsPro(pro);
+    let cancelled = false;
+    async function load() {
+      try {
+        const pro = getIsPro();
+        setIsPro(pro);
 
-      const freeRecords = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.FREE_RECORDS)).map((r) => ({
-        ...r,
-        session: {
-          ...r.session,
-          accessMode: r.session?.accessMode ?? "free",
-        },
-      }));
+        const freeRecords = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.FREE_RECORDS)).map((r) => ({
+          ...r,
+          storageKind: "free" as const,
+          session: {
+            ...r.session,
+            accessMode: r.session?.accessMode ?? "free",
+          },
+        }));
 
-      const proRecords = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.PRO_RECORDS)).map((r) => ({
-        ...r,
-        session: {
-          ...r.session,
-          accessMode: r.session?.accessMode ?? "pro",
-        },
-      }));
+        const loaded = await loadRecordsForDisplay();
+        if (cancelled) return;
+        setReadOnly(loaded.readOnly);
+        setError(loaded.warning);
+        const proRecords = loaded.records.map((r) => ({
+          ...r,
+          storageKind: "pro" as const,
+          session: {
+            ...r.session,
+            accessMode: r.session?.accessMode ?? "pro",
+          },
+        }));
 
-      const merged = dedupeRecords([...proRecords, ...freeRecords]).sort((a, b) => {
-        const ta = new Date(a.savedAt || a.session?.finishedAt || 0).getTime();
-        const tb = new Date(b.savedAt || b.session?.finishedAt || 0).getTime();
-        return tb - ta;
-      });
+        const merged = dedupeRecords([...proRecords, ...freeRecords]).sort((a, b) => {
+          const ta = new Date(a.savedAt || a.session?.finishedAt || 0).getTime();
+          const tb = new Date(b.savedAt || b.session?.finishedAt || 0).getTime();
+          return tb - ta;
+        });
 
-      setRecords(merged);
-    } catch {
-      setError("記録の読み込みに失敗しました。");
+        setRecords(merged);
+      } catch {
+        if (!cancelled) setError("記録の読み込みに失敗しました。");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
-  }, []);
+    void load();
+    return () => { cancelled = true; };
+  }, [revision]);
 
   const counts = useMemo(() => {
-    const freeCount = records.filter((r) => (r.session?.accessMode ?? "free") !== "pro").length;
-    const proCount = records.filter((r) => (r.session?.accessMode ?? "free") === "pro").length;
+    const freeCount = records.filter((r) => r.storageKind !== "pro").length;
+    const proCount = records.filter((r) => r.storageKind === "pro").length;
     return { freeCount, proCount };
   }, [records]);
 
@@ -209,9 +226,11 @@ export default function RecentTestPage() {
     }
   }
 
-  function deleteRecord(record: SavedRecord) {
+  async function deleteRecord(record: SavedRecord) {
+    if (deleting || readOnly) return;
+    setDeleting(true);
     try {
-      const isRecordPro = (record.session?.accessMode ?? "free") === "pro";
+      const isRecordPro = record.storageKind === "pro";
 
       if (!isRecordPro) {
         const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.FREE_RECORDS));
@@ -226,12 +245,15 @@ export default function RecentTestPage() {
         return;
       }
 
-      const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.PRO_RECORDS));
-      const next = current.filter((x) => x.id !== record.id);
-      localStorage.setItem(LS_KEYS.PRO_RECORDS, JSON.stringify(next));
+      await deleteProRecord(record.id);
       setRecords((prev) => prev.filter((x) => x.id !== record.id));
+      // Reload the merged view; deleting a Pro copy must not silently delete a
+      // separately auto-saved free copy or its recording.
+      setRevision((value) => value + 1);
     } catch {
       setError("削除に失敗しました。");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -438,7 +460,7 @@ export default function RecentTestPage() {
 
           <div style={subStyle}>
             {isPro
-              ? "無料の自動保存記録と、有料で保存した記録を表示しています。"
+              ? "無料の自動保存記録と、有料で保存した記録を表示しています。有料記録は件数による自動削除を行いません。"
               : "無料版では直近5件の自動保存記録を表示します。"}
           </div>
 
@@ -461,7 +483,7 @@ export default function RecentTestPage() {
           ) : null}
         </div>
 
-        {records.length === 0 ? (
+        {loading ? <div style={cardStyle} role="status">記録を読み込み中...</div> : records.length === 0 ? (
           <div style={cardStyle}>
             <div style={{ fontSize: 15, fontWeight: 900, color: "#0f172a", marginBottom: 8 }}>
               記録はまだありません
@@ -473,9 +495,8 @@ export default function RecentTestPage() {
             </div>
           </div>
         ) : (
-          records.map((record) => {
-            const mode = record.session?.accessMode ?? "free";
-            const isRecordPro = mode === "pro";
+          records.slice(0, visibleCount).map((record) => {
+            const isRecordPro = record.storageKind === "pro";
 
             return (
               <div key={record.id} style={cardStyle}>
@@ -541,7 +562,7 @@ export default function RecentTestPage() {
                     結果を見る
                   </button>
 
-                  <button type="button" onClick={() => deleteRecord(record)} style={deleteButton}>
+                  <button type="button" disabled={readOnly || deleting} onClick={() => deleteRecord(record)} style={deleteButton}>
                     削除
                   </button>
                 </div>
@@ -549,6 +570,12 @@ export default function RecentTestPage() {
             );
           })
         )}
+
+        {records.length > visibleCount ? (
+          <button type="button" style={footerButton} onClick={() => setVisibleCount((count) => count + 20)}>
+            さらに20件表示（残り{records.length - visibleCount}件）
+          </button>
+        ) : null}
 
         <div style={footerButtons}>
           <button type="button" onClick={() => router.push("/records")} style={footerButton}>

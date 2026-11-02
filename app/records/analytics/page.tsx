@@ -3,6 +3,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { loadRecordsForDisplay } from "@/app/lib/recordStore";
+import { recordTimestamp } from "@/app/lib/recordAnalysis";
 
 type SavedRecord = {
   id: string;
@@ -27,7 +29,6 @@ type MetricKey =
   | "pronunciation_fluency";
 
 const LS_KEY_IS_PRO = "speaking_is_pro";
-const LS_KEY_PRO_RECORDS = "eiken_mvp_recentRecords";
 
 const METRICS: { key: MetricKey; label: string; short: string; max: number }[] = [
   { key: "short_speech", label: "Short Speech", short: "Speech", max: 10 },
@@ -41,16 +42,6 @@ function getIsPro() {
     return localStorage.getItem(LS_KEY_IS_PRO) === "1";
   } catch {
     return false;
-  }
-}
-
-function safeJsonParseArr<T>(raw: string | null): T[] {
-  if (!raw) return [];
-  try {
-    const v = JSON.parse(raw);
-    return Array.isArray(v) ? (v as T[]) : [];
-  } catch {
-    return [];
   }
 }
 
@@ -107,23 +98,26 @@ export default function SpeakingAnalyticsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    try {
-      const pro = getIsPro();
-      setIsPro(pro);
+    let cancelled = false;
+    async function load() {
+      try {
+        const pro = getIsPro();
+        setIsPro(pro);
 
-      if (!pro) return;
+        if (!pro) return;
 
-      const all = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEY_PRO_RECORDS));
-      const sorted = [...all].sort((a, b) => {
-        const ta = new Date(a.savedAt || 0).getTime();
-        const tb = new Date(b.savedAt || 0).getTime();
-        return tb - ta;
-      });
+        const loaded = await loadRecordsForDisplay();
+        if (cancelled) return;
+        setError(loaded.warning);
+        const sorted = [...loaded.records].sort((a, b) => recordTimestamp(b) - recordTimestamp(a));
 
-      setRecords(sorted.slice(0, 5));
-    } catch {
-      setError("分析データの読み込みに失敗しました。");
+        setRecords(sorted.slice(0, 5));
+      } catch {
+        if (!cancelled) setError("分析データの読み込みに失敗しました。");
+      }
     }
+    void load();
+    return () => { cancelled = true; };
   }, []);
 
   const analytics = useMemo(() => {

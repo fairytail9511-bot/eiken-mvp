@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import PaidPlanNudge from "./components/PaidPlanNudge";
+import Link from "next/link";
+import { recordPreviewEnabled } from "./lib/previewEnvironment";
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -12,10 +14,14 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const recordPreview = recordPreviewEnabled();
   return (
     <html lang="en">
       <body className="antialiased" style={{ background: "transparent" }}>
-        <PaidPlanNudge />
+        {recordPreview ? <div style={{ background: "#fef3c7", color: "#78350f", padding: "10px 14px", textAlign: "center", fontSize: 13 }}>
+          本番ではありません：記録保存の検証用　<Link href="/preview/records" style={{ textDecoration: "underline" }}>検証メニューへ</Link>
+        </div> : null}
+        {!recordPreview ? <PaidPlanNudge /> : null}
         {children}
       </body>
     </html>

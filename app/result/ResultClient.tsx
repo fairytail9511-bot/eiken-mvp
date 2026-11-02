@@ -1,11 +1,13 @@
 // app/result/ResultClient.tsx
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 import { clearLocalRecordingSession, createRecordingSessionId } from "@/app/lib/localRecordings";
+import { saveProRecord, upsertFreeRecentRecord } from "@/app/lib/recordStore";
+import { isRecordingReferenced } from "@/app/lib/recordingReferences";
 import {
   ACTIVE_REVIEW_ITEM_KEY,
   addReviewItem,
@@ -56,6 +58,7 @@ type ScoreResultAny = {
 };
 
 type SessionData = {
+  sessionId?: string;
   topic?: string;
   finishedAt?: string;
   audioSessionId?: string;
@@ -85,22 +88,6 @@ type SpeechAIFeedback = {
   improved: string;
 };
 
-type SavedRecord = {
-  id: string;
-  savedAt: string;
-  topic: string;
-  difficulty?: "easy" | "real" | "hard" | string;
-  durationSec?: number;
-  total: number;
-  breakdown: {
-    short_speech: number;
-    interaction: number;
-    grammar_vocab: number;
-    pronunciation_fluency: number;
-  };
-  session: SessionData;
-};
-
 type TopicAttemptHistoryEntry = {
   id: string;
   topicKey: string;
@@ -117,9 +104,7 @@ const LS_KEYS = {
   SELECTED_TOPIC: "eiken_mvp_selectedTopic",
   PENDING_INTERVIEW: "eiken_mvp_pendingInterview",
   SCORE_LOCKED: "eiken_mvp_score_locked",
-  RECENT_RECORDS: "eiken_mvp_recentRecords",
   INTERVIEW_START: "eiken_mvp_interview_start",
-  FREE_RECENT_RECORDS: "speaking_recent_records_free",
   IS_PRO: "speaking_is_pro",
   TRIAL_USED: "speaking_trial_used",
 } as const;
@@ -129,8 +114,6 @@ const SESSION_KEYS = {
 } as const;
 
 const REFRESH_LIMIT_FREE = 3;
-const RECENT_LIMIT_PRO = 20;
-const RECENT_LIMIT_FREE = 5;
 const TOPIC_HISTORY_LIMIT = 5;
 const TOPIC_HISTORY_GLOBAL_LIMIT = 50;
 
@@ -335,66 +318,6 @@ function buildTranscriptFromSession(session: SessionData | null) {
     lines.push(`${who}: ${String(m.text ?? "")}`);
   }
   return lines.join("\n");
-}
-
-function buildSavedRecord(session: SessionData): SavedRecord {
-  const now = new Date().toISOString();
-  const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-  const b = session?.scoreResult?.breakdown ?? {};
-  const short_speech = Number(b.short_speech) || 0;
-  const interaction = Number(b.interaction) || 0;
-  const grammar_vocab = Number(b.grammar_vocab) || 0;
-  const pronunciation_fluency = Number(b.pronunciation_fluency) || 0;
-  const total = short_speech + interaction + grammar_vocab + pronunciation_fluency;
-
-  return {
-    id,
-    savedAt: now,
-    durationSec: session?.durationSec ?? undefined,
-    topic: String(session?.topic ?? ""),
-    total,
-    breakdown: { short_speech, interaction, grammar_vocab, pronunciation_fluency },
-    session,
-    difficulty: session?.difficulty ?? "-",
-  };
-}
-
-function saveToRecentRecords(session: SessionData) {
-  if (typeof window === "undefined") throw new Error("ブラウザ環境でのみ保存できます。");
-  const record = buildSavedRecord(session);
-  const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.RECENT_RECORDS));
-  const next = [record, ...current].slice(0, RECENT_LIMIT_PRO);
-  localStorage.setItem(LS_KEYS.RECENT_RECORDS, JSON.stringify(next));
-  return record;
-}
-
-function freeAutoSaveId(session: SessionData) {
-  const topic = asString(session.topic);
-  const finishedAt = asString(session.finishedAt);
-  const total = asInt(session?.scoreResult?.total);
-  return `${finishedAt}__${topic}__${total}`;
-}
-
-function upsertFreeRecentRecord(session: SessionData) {
-  if (typeof window === "undefined") throw new Error("ブラウザ環境でのみ保存できます。");
-
-  const dedupeId = freeAutoSaveId(session);
-  const current = safeJsonParseArr<SavedRecord>(localStorage.getItem(LS_KEYS.FREE_RECENT_RECORDS));
-  const existing = current.find((x) => freeAutoSaveId(x.session) === dedupeId);
-
-  const fresh = buildSavedRecord(session);
-  const record: SavedRecord = existing
-    ? {
-        ...fresh,
-        id: existing.id,
-        savedAt: existing.savedAt,
-      }
-    : fresh;
-
-  const withoutDup = current.filter((x) => freeAutoSaveId(x.session) !== dedupeId);
-  const next = [record, ...withoutDup].slice(0, RECENT_LIMIT_FREE);
-  localStorage.setItem(LS_KEYS.FREE_RECENT_RECORDS, JSON.stringify(next));
 }
 
 function sessionRefreshKey(session: SessionData | null, target: "sections" | "comment") {
@@ -708,6 +631,7 @@ export default function ResultClient() {
 
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveDone, setSaveDone] = useState(false);
+  const savingRef = useRef(false);
   const [freeAutoSaved, setFreeAutoSaved] = useState(false);
   const [reviewListAdded, setReviewListAdded] = useState(false);
 
@@ -741,13 +665,22 @@ export default function ResultClient() {
         }
       } catch {}
 
-      const nextSession = durationSec != null ? { ...parsed, durationSec } : parsed;
+      const nextSession = {
+        ...parsed,
+        ...(durationSec != null ? { durationSec } : {}),
+        // Only identity-less historical sessions need a generated ID. Persist
+        // it before offering Save so a reload cannot produce a duplicate.
+        ...(!parsed.sessionId && !parsed.audioSessionId && !parsed.finishedAt
+          ? { sessionId: createRecordingSessionId() } : {}),
+      };
 
       try {
-        if (durationSec != null) {
+        if (durationSec != null || nextSession.sessionId !== parsed.sessionId) {
           localStorage.setItem(LS_KEYS.LAST_SESSION, JSON.stringify(nextSession));
         }
-      } catch {}
+      } catch (e) {
+        if (nextSession.sessionId !== parsed.sessionId) throw e;
+      }
 
       try {
         if (!durationSec) {
@@ -829,7 +762,9 @@ export default function ResultClient() {
     try {
       upsertFreeRecentRecord(sessionData);
       setFreeAutoSaved(true);
-    } catch {}
+    } catch {
+      setError("無料記録を保存できませんでした。端末の空き容量や保存設定をご確認ください。");
+    }
   }, [sessionData, fromRecords, isPro]);
 
   const breakdown = sessionData?.scoreResult?.breakdown ?? {};
@@ -1086,7 +1021,8 @@ export default function ResultClient() {
     }
   }
 
-  function onClickSave() {
+  async function onClickSave() {
+    if (savingRef.current) return;
     setError("");
     setSaveDone(false);
 
@@ -1100,13 +1036,15 @@ export default function ResultClient() {
       return;
     }
 
+    savingRef.current = true;
     setSaveLoading(true);
     try {
-      saveToRecentRecords(sessionData);
+      await saveProRecord(sessionData);
       setSaveDone(true);
     } catch (e: any) {
-      setError(e?.message ?? "保存に失敗しました。");
+      setError(`保存できませんでした。既存記録は削除していません。端末の空き容量を確認し、再試行してください。${e?.message ? `\n${e.message}` : ""}`);
     } finally {
+      savingRef.current = false;
       setSaveLoading(false);
     }
   }
@@ -1199,12 +1137,15 @@ export default function ResultClient() {
   async function deleteTopicAttempt(entry: TopicAttemptHistoryEntry) {
     const isCurrentAttempt = sessionData ? entry.id === topicHistoryEntryId(sessionData) : false;
     if (isCurrentAttempt) return;
-    if (!window.confirm("この挑戦履歴と端末内の録音を削除しますか？")) return;
+    if (!window.confirm("この挑戦履歴を削除しますか？録音は、保存記録や復習などから参照されている場合は残ります。")) return;
 
     try {
+      const keepAudio = entry.session.audioSessionId
+        ? await isRecordingReferenced(entry.session.audioSessionId, entry.id)
+        : true;
       const next = loadTopicAttemptHistory().filter((item) => item.id !== entry.id);
       localStorage.setItem(LS_KEYS.TOPIC_ATTEMPT_HISTORY, JSON.stringify(next));
-      if (entry.session.audioSessionId) {
+      if (entry.session.audioSessionId && !keepAudio) {
         await clearLocalRecordingSession(entry.session.audioSessionId);
       }
       setTopicAttemptHistory((current) => current.filter((item) => item.id !== entry.id));

@@ -3,6 +3,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { loadRecordsForDisplay } from "@/app/lib/recordStore";
+import { latestRecordsByDay, recordTimestamp } from "@/app/lib/recordAnalysis";
 
 type SavedRecord = {
   id: string;
@@ -27,8 +29,6 @@ type Metric =
 
 type RangeKey = "1m" | "3m" | "6m" | "all";
 
-const LS_KEY = "eiken_mvp_recentRecords";
-
 const METRIC_LABEL: Record<Metric, string> = {
   total: "総合点",
   short_speech: "Short Speech",
@@ -36,10 +36,6 @@ const METRIC_LABEL: Record<Metric, string> = {
   grammar_vocab: "Grammar & Vocabulary",
   pronunciation_fluency: "Pronunciation",
 };
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
 
 function startOfDay(d: Date) {
   const x = new Date(d);
@@ -98,18 +94,15 @@ export default function MetricPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) {
-        setRecords([]);
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setRecords(parsed as SavedRecord[]);
-      else setRecords([]);
-    } catch {
-      setError("データの読み込みに失敗しました。");
-    }
+    let cancelled = false;
+    void loadRecordsForDisplay().then((loaded) => {
+      if (cancelled) return;
+      setRecords(loaded.records);
+      setError(loaded.warning);
+    }).catch(() => {
+      if (!cancelled) setError("データの読み込みに失敗しました。");
+    });
+    return () => { cancelled = true; };
   }, []);
 
   const maxScore = metric === "total" ? 40 : 10;
@@ -128,7 +121,7 @@ export default function MetricPage() {
 
     if (range === "all") {
       const times = (records ?? [])
-        .map((r) => new Date(r.savedAt).getTime())
+        .map(recordTimestamp)
         .filter((t) => Number.isFinite(t));
 
       if (times.length === 0) return { from: thisMonthStart, to };
@@ -149,28 +142,9 @@ export default function MetricPage() {
     const fromMs = rangeWindow.from.getTime();
     const toMs = rangeWindow.to.getTime();
 
-    const inRange = src.filter((r) => {
-      const t = new Date(r.savedAt).getTime();
-      return Number.isFinite(t) && t >= fromMs && t <= toMs;
-    });
-
-    const byDay = new Map<string, SavedRecord>();
-    for (const r of inRange) {
-      const d = startOfDay(new Date(r.savedAt));
-      const key = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-      const prev = byDay.get(key);
-      if (!prev) {
-        byDay.set(key, r);
-      } else {
-        const a = new Date(prev.savedAt).getTime();
-        const b = new Date(r.savedAt).getTime();
-        if (b >= a) byDay.set(key, r);
-      }
-    }
-
-    return Array.from(byDay.entries())
+    return latestRecordsByDay(src, fromMs, toMs)
       .map(([key, r]) => {
-        const d = new Date(r.savedAt);
+        const d = new Date(recordTimestamp(r));
         const day = startOfDay(d);
 
         const scoreRaw = metric === "total" ? r.total : r.breakdown?.[metricKey];
