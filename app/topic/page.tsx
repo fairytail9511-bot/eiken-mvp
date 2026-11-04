@@ -9,6 +9,8 @@ import { type TtsGender } from "@/app/lib/tts";
 import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
 import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import { useInterviewStage } from "@/app/lib/useInterviewStage";
+import InterviewResumeNotice from "@/app/components/InterviewResumeNotice";
 
 // ====== 🎤 helpers ======
 function pickBestMimeType() {
@@ -31,6 +33,9 @@ function extFromMime(mime: string) {
 
 export default function TopicPage() {
   const router = useRouter();
+  const progress = useInterviewStage("topic");
+  const [hydrated, setHydrated] = useState(false);
+  const deadlineRef = useRef<number | null>(null);
 
   const PREP_SECONDS = 60;
 
@@ -179,6 +184,27 @@ export default function TopicPage() {
 
   const didFetchTopicsRef = useRef(false);
   useEffect(() => {
+    if (!progress.ready || hydrated) return;
+    const saved = progress.initial.current;
+    if (saved) {
+      didFetchTopicsRef.current = true; didStartPrepRef.current = true;
+      deadlineRef.current = saved.deadline;
+      setTopicTexts(saved.topics); setSelectedIndex(saved.selectedIndex); setAnswer(saved.answer); setUsedFallback(saved.usedFallback);
+      const left = saved.deadline == null ? PREP_SECONDS : Math.max(0, Math.ceil((saved.deadline - Date.now()) / 1000));
+      didAskSpeakRef.current = left === 0;
+      setSecondsLeft(left); setPhase(left === 0 ? "ask" : "prep"); setPrepStarted(saved.deadline != null);
+    }
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress.ready, hydrated]);
+
+  function installTopics(topics: string[], fallback: boolean) {
+    if (!progress.save({ topics, selectedIndex: 0, answer: "", deadline: null, usedFallback: fallback })) return;
+    setTopicTexts(topics); setSelectedIndex(0); setUsedFallback(fallback);
+  }
+
+  useEffect(() => {
+    if (!progress.ready || !hydrated) return;
     if (didFetchTopicsRef.current) return;
     didFetchTopicsRef.current = true;
 
@@ -193,6 +219,7 @@ export default function TopicPage() {
           body: JSON.stringify({ count: 5, difficulty }),
         });
         const data = await res.json();
+        if (!progress.isCurrent()) return;
         if (!res.ok) throw new Error(data?.error ?? "Failed to fetch topics");
 
         const qs = Array.isArray(data?.questions) ? data.questions : [];
@@ -200,19 +227,24 @@ export default function TopicPage() {
 
         if (cleaned.length !== 5) throw new Error("Topic questions are invalid (need exactly 5)");
 
-        setTopicTexts(cleaned);
-        setSelectedIndex(0);
-        setUsedFallback(false);
+        installTopics(cleaned, false);
       } catch (e: any) {
-        setTopicTexts(FALLBACK_TOPICS);
-        setSelectedIndex(0);
+        if (!progress.isCurrent()) return;
+        installTopics(FALLBACK_TOPICS, true);
         setError(e?.message ?? "Failed to load topics. Using fallback topics.");
         setUsedFallback(true);
       } finally {
         setLoadingTopics(false);
       }
     })();
-  }, [difficulty]);
+  }, [difficulty, progress.ready, hydrated]);
+
+  async function startPreparation() {
+    await speakAsync(examinerIntro);
+    if (!progress.isCurrent()) return;
+    deadlineRef.current = Date.now() + PREP_SECONDS * 1000;
+    if (progress.patch({ deadline: deadlineRef.current })) setPrepStarted(true);
+  }
 
   useEffect(() => {
     if (!topicTexts) return;
@@ -226,7 +258,7 @@ export default function TopicPage() {
       setPhase("prep");
       setSecondsLeft(PREP_SECONDS);
 
-      await speakAsync(examinerIntro);
+      await startPreparation();
       if (cancelled) return;
       setPrepStarted(true);
     })();
@@ -239,7 +271,7 @@ export default function TopicPage() {
     if (!prepStarted) return;
 
     const timer = window.setInterval(() => {
-      setSecondsLeft((s) => (s > 0 ? s - 1 : 0));
+      setSecondsLeft(deadlineRef.current == null ? PREP_SECONDS : Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000)));
     }, 1000);
 
     return () => window.clearInterval(timer);
@@ -270,6 +302,7 @@ export default function TopicPage() {
 
   // ====== 🎤 Start recording ======
   async function startRecording() {
+    if (!hydrated || !progress.isCurrent()) return;
     if (audio.busy) return;
     setError("");
     if (isRecording || isStarting || isTranscribing) return;
@@ -284,6 +317,7 @@ export default function TopicPage() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!progress.isCurrent()) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current = stream;
 
       const mime = pickBestMimeType();
@@ -299,6 +333,7 @@ export default function TopicPage() {
       };
 
       recorder.onstop = async () => {
+        if (!progress.isCurrent()) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -317,20 +352,20 @@ export default function TopicPage() {
 
           const res = await fetch("/api/transcribe", { method: "POST", body: fd });
           const data = await res.json();
+          if (!progress.isCurrent()) return;
           if (!res.ok) throw new Error(data?.error ?? "Failed to transcribe");
 
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No transcription returned");
 
-          setAnswer((prev) => {
-            const p = prev ?? "";
-            if (!p.trim()) return text;
-            return p.endsWith(" ") ? p + text : p + " " + text;
-          });
+          const previous = progress.current.current?.answer ?? "";
+          const merged = !previous.trim() ? text : `${previous.trim()} ${text}`;
+          if (!progress.patch({ answer: merged })) return;
+          setAnswer(merged);
 
           if (autoSubmitAfterStopRef.current) {
             autoSubmitAfterStopRef.current = false;
-            submitChoice();
+            submitChoice(merged);
           }
         } catch (e: any) {
           setError(e?.message ?? "Transcription error");
@@ -373,9 +408,11 @@ export default function TopicPage() {
     }
   }
 
-  function submitChoice() {
+  function submitChoice(answerOverride?: string) {
+    if (!hydrated || !progress.isCurrent()) return;
     setError("");
-    const chosenTopic = selectedTopicText;
+    const saved = progress.current.current;
+    const chosenTopic = saved?.topics[saved.selectedIndex] ?? selectedTopicText;
 
     if (!chosenTopic) {
       setError("トピックがまだ準備できていません。少し待ってください。");
@@ -387,7 +424,7 @@ export default function TopicPage() {
       localStorage.setItem(
         LS_KEYS.TOPIC_CHOICE_ANSWER,
         JSON.stringify({
-          answer: answer.trim(),
+          answer: (answerOverride ?? saved?.answer ?? answer).trim(),
           chosenTopic,
           at: new Date().toISOString(),
         })
@@ -408,9 +445,9 @@ export default function TopicPage() {
 
         localStorage.setItem(LS_SESSION, JSON.stringify(next));
       } catch {}
-    } catch {}
+    } catch { setError("選択した題材を保存できませんでした。"); return; }
 
-    router.push(`/speech?topic=${encodeURIComponent(chosenTopic)}`);
+    if (progress.advance("speech")) router.push(`/speech?topic=${encodeURIComponent(chosenTopic)}`);
   }
 
   const canSubmit = !audio.busy && phase === "ask" && !!selectedTopicText && !isTranscribing && !isStarting;
@@ -497,6 +534,8 @@ export default function TopicPage() {
   return (
     <main style={pageBg}>
       <div style={cardWrap}>
+        <InterviewResumeNotice restored={progress.restored} error={progress.error} disabled={audio.busy || isRecording}
+          replay={() => { if (deadlineRef.current == null) void startPreparation(); else speak(phase === "ask" ? examinerAsk : examinerIntro); }} />
         <SpeechPlaybackNotice {...audio} />
         {/* ===== Top fixed avatar (約1/3) ===== */}
         <div
@@ -631,7 +670,7 @@ export default function TopicPage() {
                   <button
                     key={`${idx}-${text}`}
                     type="button"
-                    onClick={() => setSelectedIndex(idx)}
+                    onClick={() => { if (progress.patch({ selectedIndex: idx })) setSelectedIndex(idx); }}
                     style={{
                       ...listButtonBase,
                       background: selected ? selectedButtonBg : listButtonBase.background,
@@ -752,7 +791,7 @@ export default function TopicPage() {
                 <textarea
                   rows={1}
                   value={answer}
-                  onChange={(e) => setAnswer(e.target.value)}
+                  onChange={(e) => { progress.patch({ answer: e.target.value }); setAnswer(e.target.value); }}
                   placeholder='(Optional) e.g., "I chose topic three."'
                   disabled={isTranscribing}
                   style={{
@@ -770,7 +809,7 @@ export default function TopicPage() {
               {showTranscript && (
                 <button
                   type="button"
-                  onClick={submitChoice}
+                  onClick={() => submitChoice()}
                   disabled={!canSubmit}
                   style={{
                     width: "100%",

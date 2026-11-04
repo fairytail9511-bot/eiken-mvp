@@ -8,6 +8,7 @@ import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
 import { clearLocalRecordingSession, createRecordingSessionId } from "@/app/lib/localRecordings";
 import { saveProRecord, upsertFreeRecentRecord } from "@/app/lib/recordStore";
 import { isRecordingReferenced } from "@/app/lib/recordingReferences";
+import { ACCESS_CHANGED_EVENT, beginInterview } from "@/app/lib/interviewProgress";
 import {
   ACTIVE_REVIEW_ITEM_KEY,
   addReviewItem,
@@ -639,6 +640,12 @@ export default function ResultClient() {
   const [commentRefreshUsed, setCommentRefreshUsed] = useState(0);
 
   useEffect(() => {
+    const sync = () => setIsPro(getIsPro());
+    window.addEventListener(ACCESS_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(ACCESS_CHANGED_EVENT, sync);
+  }, []);
+
+  useEffect(() => {
     try {
       const pro = getIsPro();
       setIsPro(pro);
@@ -1080,6 +1087,7 @@ export default function ResultClient() {
       localStorage.removeItem(LS_KEYS.PENDING_INTERVIEW);
       localStorage.removeItem(LS_KEYS.SCORE_LOCKED);
       localStorage.setItem(LS_KEYS.INTERVIEW_START, String(Date.now()));
+      beginInterview(reviewMode === "qa" ? "qa" : "speech");
 
       if (reviewMode === "qa") {
         localStorage.setItem(

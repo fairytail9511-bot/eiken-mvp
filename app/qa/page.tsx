@@ -19,7 +19,10 @@ import { type TtsGender } from "@/app/lib/tts";
 import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
 import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
-import { saveLocalRecording } from "@/app/lib/localRecordings";
+import { loadLocalRecording, saveLocalRecording } from "@/app/lib/localRecordings";
+import { useInterviewStage } from "@/app/lib/useInterviewStage";
+import type { InterviewStates } from "@/app/lib/interviewProgress";
+import InterviewResumeNotice from "@/app/components/InterviewResumeNotice";
 
 const LS_KEY_IS_PRO = "speaking_is_pro";
 const LS_KEY_TRIAL_USED = "speaking_trial_used";
@@ -53,7 +56,7 @@ function getAccessToken() {
   }
 }
 
-function persistScoreAccess(data: ScoreAccessResponse) {
+function persistScoreAccess(data: ScoreAccessResponse, scoreMonth = monthKeyNow()) {
   try {
     if (typeof data.accessToken === "string" && data.accessToken) {
       localStorage.setItem(LS_KEY_ACCESS_TOKEN, data.accessToken);
@@ -64,8 +67,9 @@ function persistScoreAccess(data: ScoreAccessResponse) {
     }
 
     if (typeof data.usedThisMonth === "number" && Number.isFinite(data.usedThisMonth)) {
-      localStorage.setItem(LS_KEY_FREE_MONTH, monthKeyNow());
-      localStorage.setItem(LS_KEY_FREE_COUNT, String(Math.max(0, data.usedThisMonth)));
+      const previous = localStorage.getItem(LS_KEY_FREE_MONTH) === scoreMonth ? Number(localStorage.getItem(LS_KEY_FREE_COUNT) || "0") : 0;
+      localStorage.setItem(LS_KEY_FREE_MONTH, scoreMonth);
+      localStorage.setItem(LS_KEY_FREE_COUNT, String(Math.max(0, previous, data.usedThisMonth)));
     }
   } catch {}
 }
@@ -135,6 +139,11 @@ type ScoreAccessResponse = Partial<ScoreResponse> & {
 
 export default function QAPage() {
   const router = useRouter();
+  const progress = useInterviewStage("qa");
+  const scoringRef = useRef(false);
+  const recoveryRef = useRef(false);
+  const [initAttempt, setInitAttempt] = useState(0);
+  const [pendingTranscription, setPendingTranscription] = useState(false);
 
   const difficulty = useMemo(() => {
     if (typeof window === "undefined") return "real";
@@ -297,6 +306,7 @@ export default function QAPage() {
   }, []);
 
   async function startRecording() {
+    if (!progress.ready || !progress.current.current || !progress.isCurrent()) return;
     if (audio.busy) return;
     setError("");
     if (loadingInit || loadingScore || isDone) return;
@@ -316,6 +326,7 @@ export default function QAPage() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!progress.isCurrent()) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current = stream;
 
       const mime = pickBestMimeType();
@@ -330,6 +341,7 @@ export default function QAPage() {
       };
 
       mr.onstop = async () => {
+        if (!progress.isCurrent()) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -342,9 +354,10 @@ export default function QAPage() {
           chunksRef.current = [];
 
           if (pending?.audioSessionId && qIndex >= 0 && qIndex <= 3) {
-            try {
-              await saveLocalRecording(pending.audioSessionId, `qa-${qIndex}`, blob);
-            } catch {}
+            await saveLocalRecording(pending.audioSessionId, `qa-${qIndex}`, blob);
+            if (!progress.isCurrent()) return;
+            if (!progress.patch({ pendingTranscription: true })) return;
+            setPendingTranscription(true);
           }
 
           const fd = new FormData();
@@ -354,12 +367,13 @@ export default function QAPage() {
 
           const res = await fetch("/api/transcribe", { method: "POST", body: fd });
           const data = (await res.json()) as Partial<TranscribeResponse> & { error?: string };
+          if (!progress.isCurrent()) return;
           if (!res.ok) throw new Error(data?.error ?? "Failed to transcribe");
 
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No text returned from transcription");
 
-          sendAnswer(text);
+          sendAnswer(text, true);
         } catch (e: any) {
           setError(e?.message ?? "Transcription error");
         } finally {
@@ -414,7 +428,16 @@ export default function QAPage() {
   ===================== */
   const didInitRef = useRef(false);
 
+  function installQA(value: InterviewStates["qa"]) {
+    if (!progress.save(value)) return false;
+    lastSpokenRef.current = [...value.msgs].reverse().find((m) => m.role === "examiner")?.text ?? "";
+    setPending(value.pending); setQuestions(value.questions); setQIndex(value.qIndex); setMsgs(value.msgs); setInput(value.input);
+    qaAnalysisRef.current = value.analysis; setPendingTranscription(!!value.pendingTranscription);
+    return true;
+  }
+
   useEffect(() => {
+    if (!progress.ready) return;
     if (didInitRef.current) return;
     didInitRef.current = true;
 
@@ -423,11 +446,14 @@ export default function QAPage() {
       setError("");
 
       try {
+        const saved = progress.initial.current;
+        if (saved) { installQA(saved); return; }
         const raw = localStorage.getItem(LS_KEYS.PENDING_INTERVIEW);
         if (!raw) throw new Error("面接データがありません。Topicからやり直してください。");
 
         const p = JSON.parse(raw) as PendingInterview;
         if (!p?.topic || !p?.speech) throw new Error("面接データが壊れています。Topicからやり直してください。");
+        if (!p.audioSessionId) { p.audioSessionId = progress.runId; localStorage.setItem(LS_KEYS.PENDING_INTERVIEW, JSON.stringify(p)); }
         setPending(p);
 
         if (p.reviewMode === "speech") {
@@ -452,6 +478,9 @@ export default function QAPage() {
             { role: "examiner", text: "Thank you very much. This concludes the interview." },
           ]);
           setQIndex(4);
+          installQA({ pending: p, questions: orderedQa.map((item) => item.questionText), qIndex: 4, input: "", analysis: orderedQa,
+            msgs: [...orderedQa.flatMap((item) => [{ role: "examiner" as const, text: item.questionText }, { role: "user" as const, text: item.answerText }]),
+              { role: "examiner", text: "Thank you very much. This concludes the interview." }] });
           return;
         }
 
@@ -468,10 +497,7 @@ export default function QAPage() {
             throw new Error("同じ4問での復習に必要な前回の質問記録がありません。");
           }
 
-          setQuestions(reusedQuestions);
-          setMsgs([{ role: "examiner", text: reusedQuestions[0] }]);
-          setQIndex(0);
-          void speakQueue([reusedQuestions[0]]);
+          if (installQA({ pending: p, questions: reusedQuestions, qIndex: 0, input: "", analysis: [], msgs: [{ role: "examiner", text: reusedQuestions[0] }] })) void speakQueue([reusedQuestions[0]]);
           return;
         }
 
@@ -482,6 +508,7 @@ export default function QAPage() {
         });
 
         const data = (await res.json()) as any;
+        if (!progress.isCurrent()) return;
         if (!res.ok) throw new Error(data?.error ?? "Failed to generate Q&A questions");
 
         const qsRaw = Array.isArray(data?.questions) ? data.questions : [];
@@ -490,41 +517,35 @@ export default function QAPage() {
         if (cleaned.length !== 4) throw new Error("Q&A questions are invalid (need exactly 4)");
 
         const qaResp: QAResponse = { questions: [cleaned[0], cleaned[1], cleaned[2], cleaned[3]] };
-        setQuestions([...qaResp.questions]);
-
         const firstQ = qaResp.questions[0];
-        setMsgs([{ role: "examiner", text: firstQ }]);
-        setQIndex(0);
-
-        void speakQueue([firstQ]);
+        if (installQA({ pending: p, questions: [...qaResp.questions], qIndex: 0, msgs: [{ role: "examiner", text: firstQ }], input: "", analysis: [] })) void speakQueue([firstQ]);
       } catch (e: any) {
+        if (!progress.isCurrent()) return;
+        didInitRef.current = false;
         setError(e?.message ?? "Error");
       } finally {
         setLoadingInit(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [progress.ready, initAttempt]);
 
   /* =====================
      Answer handling
   ===================== */
-  function pushMsg(role: Msg["role"], text: string) {
-    setMsgs((prev) => [...prev, { role, text }]);
-  }
-
-  function sendAnswer(forcedText?: string) {
+  function sendAnswer(forcedText?: string, fromRecording = false) {
+    if (!progress.isCurrent()) return;
     if (audio.busy) return;
     setError("");
     if (loadingInit || loadingScore) return;
-    if (isRecording || isStarting || isTranscribing) return;
+    if (!fromRecording && (isRecording || isStarting || isTranscribing)) return;
 
     const text = (forcedText ?? input).trim();
     if (!text) return;
-
-    const currentQText = qIndex >= 0 && qIndex <= 3 ? String(questions[qIndex] ?? "") : "";
-    if (qIndex >= 0 && qIndex <= 3 && currentQText) {
-      qaAnalysisRef.current.push({
+    const saved = progress.current.current;
+    if (!saved || saved.qIndex !== qIndex || saved.qIndex < 0 || saved.qIndex > 3) return;
+    const currentQText = saved.questions[saved.qIndex];
+    const analysis = [...saved.analysis, {
         questionIndex: qIndex,
         questionText: currentQText,
         answerText: text,
@@ -532,23 +553,11 @@ export default function QAPage() {
         vagueFlags: detectVague(text),
         answeredAt: new Date().toISOString(),
         improvementExample: "",
-      });
-    }
-
-    pushMsg("user", text);
-    setInput("");
-
-    const next = qIndex + 1;
-
-    if (next <= 3) {
-      const nextQ = String(questions[next] ?? "").trim();
-      if (nextQ) pushMsg("examiner", nextQ);
-      setQIndex(next);
-      return;
-    }
-
-    pushMsg("examiner", "Thank you very much. This concludes the interview.");
-    setQIndex(4);
+    }];
+    const next = saved.qIndex + 1;
+    const messages: Msg[] = [...saved.msgs, { role: "user", text }, { role: "examiner", text: next < 4 ? saved.questions[next] : "Thank you very much. This concludes the interview." }];
+    if (!progress.save({ ...saved, qIndex: next, msgs: messages, input: "", analysis, pendingTranscription: false })) return;
+    qaAnalysisRef.current = analysis; setMsgs(messages); setInput(""); setQIndex(next); setPendingTranscription(false);
   }
 
   /* =====================
@@ -576,6 +585,7 @@ export default function QAPage() {
      Go to scoring
   ===================== */
   async function goToScore() {
+    if (scoringRef.current || !progress.isCurrent() || !isDone) return;
     setError("");
     setPaywallBlocked(false);
     if (!pending) {
@@ -587,11 +597,11 @@ export default function QAPage() {
       try {
         sessionStorage.removeItem("eiken_mvp_from_records");
       } catch {}
-      router.push("/result");
+      if (progress.advance("result")) router.push("/result");
       return;
     }
 
-    setLoadingScore(true);
+    scoringRef.current = true; setLoadingScore(true);
 
     try {
       const transcriptLines: string[] = [];
@@ -609,7 +619,8 @@ export default function QAPage() {
 
       const transcript = transcriptLines.join("\n");
 
-      const res = await fetch("/api/score", {
+      const cached = progress.current.current?.scoreResponse;
+      const res = cached ? null : await fetch("/api/score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -621,10 +632,10 @@ export default function QAPage() {
         }),
       });
 
-      const data = (await res.json()) as ScoreAccessResponse;
-      if (res.status === 402 || data?.paywall) setPaywallBlocked(true);
-      if (!res.ok) throw new Error(data?.message ?? data?.error ?? "Failed to score");
-      persistScoreAccess(data);
+      const data = (cached ?? await res!.json()) as ScoreAccessResponse;
+      if (!progress.isCurrent()) return;
+      if (res?.status === 402 || data?.paywall) setPaywallBlocked(true);
+      if (res && !res.ok) throw new Error(data?.message ?? data?.error ?? "Failed to score");
 
       const ok =
         typeof data?.total === "number" &&
@@ -644,6 +655,10 @@ export default function QAPage() {
         typeof data?.comment === "string";
 
       if (!ok) throw new Error("Invalid score response schema from /api/score");
+      const finishedAt = progress.current.current?.scoreFinishedAt ?? new Date().toISOString();
+      const scoreMonth = progress.current.current?.scoreMonth ?? monthKeyNow();
+      if (!progress.patch({ scoreResponse: data, scoreFinishedAt: finishedAt, scoreMonth })) throw new Error("採点結果を途中保存できませんでした。再試行してください。");
+      persistScoreAccess(data, scoreMonth);
 
       let scoreResult: ScoreResult = {
         total: data.total as number,
@@ -727,11 +742,13 @@ export default function QAPage() {
               })
             );
 
+      if (!progress.isCurrent()) return;
       localStorage.setItem(
         LS_KEYS.LAST_SESSION,
         JSON.stringify({
           topic: pending.topic,
-          finishedAt: new Date().toISOString(),
+          finishedAt,
+          sessionId: progress.runId,
           audioSessionId: pending.audioSessionId,
           retryPreviousFinishedAt: pending.retryPreviousFinishedAt,
           reviewMode: pending.reviewMode,
@@ -747,14 +764,33 @@ export default function QAPage() {
         })
       );
 
-      localStorage.removeItem(LS_KEYS.PENDING_INTERVIEW);
       localStorage.setItem("eiken_mvp_score_locked", "1");
+      if (!progress.advance("result")) return;
+      localStorage.removeItem(LS_KEYS.PENDING_INTERVIEW);
       router.push("/result");
     } catch (e: any) {
       setError(e?.message ?? "Error");
     } finally {
+      scoringRef.current = false;
       setLoadingScore(false);
     }
+  }
+
+  async function recoverRecordedAnswer() {
+    if (recoveryRef.current || !pending?.audioSessionId || !progress.isCurrent()) return;
+    recoveryRef.current = true; setIsTranscribing(true); setError("");
+    const index = qIndex;
+    try {
+      const blob = await loadLocalRecording(pending.audioSessionId, `qa-${index}`);
+      if (!blob) throw new Error("保存済みの録音が見つかりません。録り直してください。");
+      const fd = new FormData(); fd.append("file", blob, `answer.${extFromMime(blob.type)}`); fd.append("language", "en");
+      const response = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await response.json();
+      if (!progress.isCurrent() || progress.current.current?.qIndex !== index) return;
+      if (!response.ok || !String(data.text ?? "").trim()) throw new Error(data.error ?? "文字起こしを復元できませんでした。");
+      sendAnswer(String(data.text).trim(), true);
+    } catch (e) { setError(e instanceof Error ? e.message : "録音を復元できませんでした。"); }
+    finally { recoveryRef.current = false; if (progress.isCurrent()) setIsTranscribing(false); }
   }
 
   /* =====================
@@ -955,6 +991,10 @@ export default function QAPage() {
   return (
     <main style={containerStyle}>
       <div style={phoneStyle}>
+        <InterviewResumeNotice restored={progress.restored} error={progress.error} disabled={audio.busy || isRecording || loadingScore}
+          replay={() => { const last = [...msgs].reverse().find((m) => m.role === "examiner"); if (last) void speakNow(last.text); }} />
+        {!loadingInit && questions.length === 0 ? <button type="button" onClick={() => setInitAttempt((n) => n + 1)}>質問の準備を再試行</button> : null}
+        {pendingTranscription && !isDone ? <button type="button" disabled={isTranscribing || audio.busy || isRecording} onClick={() => void recoverRecordedAnswer()}>保存した録音から回答を復元</button> : null}
         <SpeechPlaybackNotice {...audio} />
         {/* Avatar */}
         <div style={avatarWrapStyle}>
@@ -1059,7 +1099,7 @@ export default function QAPage() {
                   <textarea
                     rows={1}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={(e) => { progress.patch({ input: e.target.value }); setInput(e.target.value); }}
                     placeholder="Type your answer here..."
                     disabled={loadingScore || isTranscribing}
                     style={{

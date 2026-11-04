@@ -1,0 +1,46 @@
+*** Begin Patch
+*** Update File: /Users/mcgabriel/Desktop/eiken-grade1-speaking/eiken-grade1-speaking/ContentView.swift
+@@
+-                self?.syncWebProAndReload()
++                self?.syncWebPro()
+@@
+-                self?.syncWebProAndReload()
++                self?.syncWebPro()
+@@
+-                syncWebProAndReload()
++                syncWebPro()
+@@
+-            syncWebProAndReload()
++            syncWebPro()
+@@
+-        private func syncWebProAndReload() {
++        private func syncWebPro() {
++            // Keep StoreKit authoritative without destroying the current page.
++            guard let webView, webView.url?.host == "eiken-mvp.vercel.app" else { return }
+             let value = store.isPro ? "1" : "0"
+-            let js = "localStorage.setItem('speaking_is_pro','\(value)'); location.reload();"
++            let js = """
++            (function() {
++                const value = '\(value)';
++                const key = 'speaking_is_pro';
++                if (localStorage.getItem(key) !== value) localStorage.setItem(key, value);
++                window.dispatchEvent(new Event('eiken_mvp_access_changed'));
++            })();
++            """
+ 
+-            webView?.evaluateJavaScript(js) { _, error in
++            webView.evaluateJavaScript(js) { _, error in
+@@
+         func webView(
++            _ webView: WKWebView,
++            didFinish navigation: WKNavigation!
++        ) {
++            // Entitlement refresh can finish before the initial page loads.
++            // Re-apply on navigation, still without reloading or clearing data.
++            syncWebPro()
++        }
++
++        func webView(
+             _ webView: WKWebView,
+             requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+*** End Patch

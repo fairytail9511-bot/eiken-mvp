@@ -10,8 +10,10 @@ import { type TtsGender } from "@/app/lib/tts";
 import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
 import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
-import { createRecordingSessionId, saveLocalRecording } from "@/app/lib/localRecordings";
+import { createRecordingSessionId, loadLocalRecording, saveLocalRecording } from "@/app/lib/localRecordings";
 import { ACTIVE_REVIEW_ITEM_KEY } from "@/app/lib/reviewList";
+import { useInterviewStage } from "@/app/lib/useInterviewStage";
+import InterviewResumeNotice from "@/app/components/InterviewResumeNotice";
 
 // ====== 🎤 helpers ======
 function pickBestMimeType() {
@@ -42,6 +44,11 @@ function formatMMSS(totalSec: number) {
 export default function SpeechClient() {
   const router = useRouter();
   const sp = useSearchParams();
+  const progress = useInterviewStage("speech");
+  const [hydrated, setHydrated] = useState(false);
+  const [timerStarted, setTimerStarted] = useState(false);
+  const [pendingTranscription, setPendingTranscription] = useState(false);
+  const recoveryRef = useRef(false);
 
   const topicFromQuery = (sp.get("topic") ?? "").toString().trim();
   const isSameTopicRetry = sp.get("retry") === "1";
@@ -175,25 +182,46 @@ export default function SpeechClient() {
   // 🔊 auto speak once (最初の案内) + timer
   const didSpeakRef = useRef(false);
   useEffect(() => {
+    if (!progress.ready || hydrated) return;
+    const saved = progress.initial.current;
+    if (saved) {
+      setTopic(saved.topic); setSpeech(saved.speech); setPhase(saved.phase);
+      audioSessionIdRef.current = saved.audioSessionId; startedAtRef.current = saved.startedAt ?? Date.now();
+      setTick((value) => value + 1);
+      setTimerStarted(saved.startedAt != null); setPendingTranscription(!!saved.pendingTranscription);
+      setHydrated(true);
+    } else {
+      const chosen = topicFromQuery || localStorage.getItem(LS_KEYS.SELECTED_TOPIC) || "";
+      audioSessionIdRef.current = progress.runId;
+      if (progress.save({ topic: chosen, speech: "", phase: "speech", startedAt: null, audioSessionId: progress.runId,
+        retry: isSameTopicRetry, reviewMode })) { setTopic(chosen); setHydrated(true); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress.ready, hydrated]);
+
+  function updateSpeech(text: string) { if (progress.patch({ speech: text })) setSpeech(text); }
+
+  async function startSpeechTimer() {
+    await speakOnce(examinerLine);
+    if (!progress.isCurrent()) return;
+    startedAtRef.current = Date.now();
+    setTick((value) => value + 1);
+    if (progress.patch({ startedAt: startedAtRef.current })) setTimerStarted(true);
+  }
+
+  useEffect(() => {
+    if (!hydrated) return;
     if (didSpeakRef.current) return;
     didSpeakRef.current = true;
-
-    let timerId: number | null = null;
-    let cancelled = false;
-
-    (async () => {
-      await speakOnce(examinerLine);
-      if (cancelled) return;
-      startedAtRef.current = Date.now();
-      timerId = window.setInterval(() => setTick((t) => t + 1), 1000);
-    })();
-
-    return () => {
-      cancelled = true;
-      if (timerId) window.clearInterval(timerId);
-    };
+    if (!progress.restored) void startSpeechTimer();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || !timerStarted || phase !== "speech") return;
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [hydrated, timerStarted, phase]);
 
   const elapsedSec = useMemo(() => {
     return Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000));
@@ -334,6 +362,7 @@ export default function SpeechClient() {
 
   // ====== 🎤 Start recording ======
   async function startRecording() {
+    if (!hydrated || !timerStarted || !progress.isCurrent()) return;
     if (audio.busy) return;
     setError("");
     if (isRecording || isStarting || isTranscribing) return;
@@ -348,6 +377,7 @@ export default function SpeechClient() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!progress.isCurrent()) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current = stream;
 
       const mime = pickBestMimeType();
@@ -362,6 +392,7 @@ export default function SpeechClient() {
       };
 
       recorder.onstop = async () => {
+        if (!progress.isCurrent()) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -375,9 +406,10 @@ export default function SpeechClient() {
           const blob = new Blob(recordedChunks, { type: finalMime });
           chunksRef.current = [];
 
-          try {
-            await saveLocalRecording(getAudioSessionId(), "speech", blob);
-          } catch {}
+          await saveLocalRecording(getAudioSessionId(), "speech", blob);
+          if (!progress.isCurrent()) return;
+          if (!progress.patch({ pendingTranscription: true })) return;
+          setPendingTranscription(true);
 
           const fd = new FormData();
           const ext = extFromMime(finalMime);
@@ -386,15 +418,17 @@ export default function SpeechClient() {
 
           const res = await fetch("/api/transcribe", { method: "POST", body: fd });
           const data = await res.json();
+          if (!progress.isCurrent()) return;
           if (!res.ok) throw new Error(data?.error ?? "Failed to transcribe");
 
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No transcription returned");
 
-          const current = (speech ?? "").trim();
+          const current = (progress.current.current?.speech ?? "").trim();
           const merged = !current ? text : current.endsWith(" ") ? current + text : current + " " + text;
 
-          setSpeech(merged);
+          if (!progress.patch({ speech: merged, pendingTranscription: false })) return;
+          setSpeech(merged); setPendingTranscription(false);
 
           if (autoSubmitAfterStopRef.current) {
             autoSubmitAfterStopRef.current = false;
@@ -445,6 +479,8 @@ export default function SpeechClient() {
 
   // ✅ Speech送信 → 固定文表示＆読み上げ → Yesで /qa
   function submitSpeech(speechOverride?: string) {
+    if (!hydrated || !progress.isCurrent()) return;
+    if (progress.current.current?.phase !== "speech") return;
     setError("");
     const t = (topic ?? "").trim();
     const s = (speechOverride ?? speech ?? "").trim();
@@ -480,7 +516,8 @@ export default function SpeechClient() {
 
     try {
       localStorage.setItem(LS_KEYS.PENDING_INTERVIEW, JSON.stringify(payload));
-    } catch {}
+      if (!progress.patch({ phase: "handoff", speech: s })) return;
+    } catch { setError("Speechを保存できませんでした。"); return; }
 
     setPhase("handoff");
     void speakOnce(qaIntroLine);
@@ -488,18 +525,39 @@ export default function SpeechClient() {
 
   function goToQA() {
     setError("");
-    router.push("/qa");
+    if (progress.advance("qa")) router.push("/qa");
   }
 
   function onGoTop() {
     router.push("/");
   }
 
-  const canSubmit = !audio.busy && !isStarting && !isTranscribing && (speech ?? "").trim().length > 0;
+  async function recoverRecording() {
+    if (recoveryRef.current || isTranscribing || !progress.isCurrent()) return;
+    recoveryRef.current = true;
+    setIsTranscribing(true); setError("");
+    try {
+      const blob = await loadLocalRecording(getAudioSessionId(), "speech");
+      if (!blob) throw new Error("保存済みの録音が見つかりません。録り直してください。");
+      const fd = new FormData(); fd.append("file", blob, `speech.${extFromMime(blob.type)}`); fd.append("language", "en");
+      const response = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await response.json();
+      if (!progress.isCurrent()) return;
+      if (!response.ok || !String(data.text ?? "").trim()) throw new Error(data.error ?? "文字起こしを復元できませんでした。");
+      const merged = `${progress.current.current?.speech ?? ""} ${data.text}`.trim();
+      if (progress.patch({ speech: merged, pendingTranscription: false })) { setSpeech(merged); setPendingTranscription(false); }
+    } catch (e) { setError(e instanceof Error ? e.message : "録音を復元できませんでした。"); }
+    finally { recoveryRef.current = false; if (progress.isCurrent()) setIsTranscribing(false); }
+  }
+
+  const canSubmit = hydrated && timerStarted && !audio.busy && !isStarting && !isTranscribing && (speech ?? "").trim().length > 0;
 
   return (
     <main style={pageStyle}>
       <div style={shellStyle}>
+        <InterviewResumeNotice restored={progress.restored} error={progress.error} disabled={audio.busy || isRecording || isTranscribing}
+          replay={() => { if (!timerStarted && phase === "speech") void startSpeechTimer(); else void speakOnce(phase === "handoff" ? qaIntroLine : examinerLine); }} />
+        {pendingTranscription ? <button type="button" disabled={isTranscribing || isRecording || audio.busy} onClick={() => void recoverRecording()}>保存した録音からSpeechを復元</button> : null}
         {/* ===== TOP (sticky): avatar + small info ===== */}
         <div style={topStyle}>
           <SpeechPlaybackNotice {...audio} />
@@ -618,7 +676,7 @@ export default function SpeechClient() {
                   <textarea
                     rows={10}
                     value={speech}
-                    onChange={(e) => setSpeech(e.target.value)}
+                    onChange={(e) => updateSpeech(e.target.value)}
                     placeholder="Type your speech here..."
                     disabled={isTranscribing}
                     style={{

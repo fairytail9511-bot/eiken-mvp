@@ -98,7 +98,7 @@ function renderPage(env, file, query = {}) {
     'next/link': { __esModule: true, default: 'Link' },
     '@/app/components/LocalRecordingPlayer': { __esModule: true, default: 'RecordingPlayer' },
   }, {
-    window: { confirm: () => true }, sessionStorage: env.localStorage,
+    window: { confirm: () => true, addEventListener() {}, removeEventListener() {} }, sessionStorage: env.localStorage,
     fetch: async () => { env.calls.fetch++; return { ok: true, json: async () => ({ intro: 'Intro', reason: 'Reason', example: 'Example', conclusion: 'Conclusion', improved: 'Improved' }) }; },
   }).default;
   function nodes(node) {

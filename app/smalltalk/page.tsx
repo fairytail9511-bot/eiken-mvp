@@ -9,6 +9,10 @@ import { type TtsGender } from "@/app/lib/tts";
 import { useSpeechPlayback } from "@/app/lib/useSpeechPlayback";
 import SpeechPlaybackNotice from "@/app/components/SpeechPlaybackNotice";
 import { getAvatarConfig, isAvatarId } from "@/app/lib/avatars";
+import { useInterviewStage } from "@/app/lib/useInterviewStage";
+import type { InterviewStates } from "@/app/lib/interviewProgress";
+import InterviewResumeNotice from "@/app/components/InterviewResumeNotice";
+import { loadLocalRecording, saveLocalRecording } from "@/app/lib/localRecordings";
 
 /* =====================
    Types
@@ -127,6 +131,12 @@ function sanitizeFollowup(raw: string, turnIndex: number, userIntro: string, las
 ===================== */
 export default function SmalltalkPage() {
   const router = useRouter();
+  const progress = useInterviewStage("smalltalk");
+  const [hydrated, setHydrated] = useState(false);
+  const [pendingReply, setPendingReply] = useState(false);
+  const requestBusy = useRef(false);
+  const recoveryBusy = useRef(false);
+  const [pendingTranscription, setPendingTranscription] = useState(false);
 
   const [logs, setLogs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -226,13 +236,14 @@ export default function SmalltalkPage() {
 
   const lastSpokenRef = useRef<string>("");
   useEffect(() => {
+    if (!hydrated) return;
     const cur = normalizeText(lastExaminer);
     if (!cur) return;
     if (lastSpokenRef.current === cur) return;
     lastSpokenRef.current = cur;
     void speakEn(cur);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lastExaminer]);
+  }, [lastExaminer, hydrated]);
 
   /* =====================
      Recorder states
@@ -279,13 +290,6 @@ export default function SmalltalkPage() {
   /* =====================
      Conversation helpers
   ===================== */
-  async function pushExaminer(text: string) {
-    setLogs((prev) => [...prev, { role: "examiner", text }]);
-  }
-  async function pushUser(text: string) {
-    setLogs((prev) => [...prev, { role: "user", text }]);
-  }
-
   async function generateFollowup(turnIndex: number, intro: string, lastUser: string, history: Msg[]) {
     try {
       const res = await fetch("/api/smalltalk_followup", {
@@ -306,58 +310,49 @@ export default function SmalltalkPage() {
     }
   }
 
-  async function sendText(textRaw: string) {
-    if (busy) return;
-    if (isRecording || isStarting || isTranscribing) return;
+  function applyProgress(next: InterviewStates["smalltalk"]) {
+    if (!progress.save(next)) return false;
+    setLogs(next.logs); setInput(next.input); setPhase(next.phase); setUserIntro(next.userIntro);
+    setFollowupCount(next.followupCount); setPendingReply(next.pendingReply);
+    setPendingTranscription(!!next.pendingTranscription);
+    try { saveSmalltalkToSession(next.logs); } catch {}
+    return true;
+  }
+
+  async function retryPendingReply() {
+    const saved = progress.current.current;
+    if (!saved?.pendingReply || requestBusy.current || !progress.isCurrent()) return;
+    requestBusy.current = true; setBusy(true);
+    try {
+      const lastUser = [...saved.logs].reverse().find((m) => m.role === "user")?.text ?? "";
+      const message = await generateFollowup(saved.followupCount, saved.userIntro, lastUser, saved.logs);
+      if (!progress.isCurrent()) return;
+      applyProgress({ ...saved, logs: [...saved.logs, { role: "examiner", text: message }], pendingReply: false });
+    } finally {
+      requestBusy.current = false;
+      if (progress.isCurrent()) setBusy(false);
+    }
+  }
+
+  async function sendText(textRaw: string, fromRecording = false) {
+    if (!hydrated || busy || pendingReply || requestBusy.current || !progress.isCurrent()) return;
+    if (!fromRecording && (isRecording || isStarting || isTranscribing)) return;
 
     const text = textRaw.trim();
     if (!text) return;
 
-    setBusy(true);
-    setInput("");
-
-    try {
-      await pushUser(text);
-
-      if (phase === "volume") {
-        await pushExaminer("Ok, so can you introduce yourself?");
-        setPhase("intro_request");
-        return;
-      }
-
-      if (phase === "intro_request") {
-        setUserIntro(text);
-        setFollowupCount(1);
-
-        const msg = await generateFollowup(1, text, text, [...logs, { role: "user", text }]);
-        await pushExaminer(msg);
-        setPhase("followup");
-        return;
-      }
-
-      if (phase === "followup") {
-        const nextCount = followupCount + 1;
-
-        if (nextCount <= MAX_FOLLOWUPS) {
-          setFollowupCount(nextCount);
-
-          const msg = await generateFollowup(
-            nextCount,
-            userIntro,
-            text,
-            [...logs, { role: "user", text }]
-          );
-
-          await pushExaminer(msg);
-          return;
-        }
-
-        await pushExaminer("All right, thank you. Now, let's begin the test.");
-        setPhase("ready_to_start");
-        return;
-      }
-    } finally {
-      setBusy(false);
+    const saved = progress.current.current;
+    if (!saved || saved.phase === "ready_to_start") return;
+    if (saved.phase !== phase || saved.logs.length !== logs.length) return;
+    const next = { ...saved, input: "", logs: [...saved.logs, { role: "user" as const, text }] };
+    if (saved.phase === "volume") {
+      applyProgress({ ...next, phase: "intro_request", logs: [...next.logs, { role: "examiner", text: "Ok, so can you introduce yourself?" }] });
+    } else {
+      const count = saved.phase === "intro_request" ? 1 : saved.followupCount + 1;
+      if (count <= MAX_FOLLOWUPS) {
+        if (applyProgress({ ...next, phase: "followup", userIntro: saved.phase === "intro_request" ? text : saved.userIntro,
+          followupCount: count, pendingReply: true })) await retryPendingReply();
+      } else applyProgress({ ...next, phase: "ready_to_start", logs: [...next.logs, { role: "examiner", text: "All right, thank you. Now, let's begin the test." }] });
     }
   }
 
@@ -369,6 +364,7 @@ export default function SmalltalkPage() {
      Recorder
   ===================== */
   async function startRecording() {
+    if (!hydrated || pendingReply || !progress.isCurrent()) return;
     if (audio.busy) return;
     setRecError("");
     if (busy) return;
@@ -389,6 +385,7 @@ export default function SmalltalkPage() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!progress.isCurrent()) { stream.getTracks().forEach((t) => t.stop()); return; }
       streamRef.current = stream;
 
       const mime = pickBestMimeType();
@@ -403,6 +400,7 @@ export default function SmalltalkPage() {
       };
 
       mr.onstop = async () => {
+        if (!progress.isCurrent()) return;
         setIsStarting(false);
         setIsRecording(false);
         setStopEnabled(false);
@@ -413,6 +411,10 @@ export default function SmalltalkPage() {
           const finalMime = mimeRef.current || mr.mimeType || "audio/webm";
           const blob = new Blob(chunksRef.current, { type: finalMime });
           chunksRef.current = [];
+          const part = progress.current.current?.logs.filter((m) => m.role === "user").length ?? 0;
+          await saveLocalRecording(progress.runId, `turn-${part}`, blob);
+          if (!progress.isCurrent() || !progress.patch({ pendingTranscription: true, recordingPart: part })) return;
+          setPendingTranscription(true);
 
           const fd = new FormData();
           const ext = extFromMime(finalMime);
@@ -421,16 +423,19 @@ export default function SmalltalkPage() {
 
           const res = await fetch("/api/transcribe", { method: "POST", body: fd });
           const data = (await res.json()) as { text?: string; error?: string };
+          if (!progress.isCurrent()) return;
           if (!res.ok) throw new Error(data?.error ?? "Failed to transcribe");
 
           const text = String(data?.text ?? "").trim();
           if (!text) throw new Error("No text returned from transcription");
 
           setInput(text);
+          if (!progress.patch({ input: text, pendingTranscription: false })) return;
+          setPendingTranscription(false);
 
           if (autoSendAfterStopRef.current) {
             autoSendAfterStopRef.current = false;
-            await sendText(text);
+            await sendText(text, true);
           }
         } catch (e: any) {
           setRecError(e?.message ?? "Transcription error");
@@ -490,14 +495,17 @@ export default function SmalltalkPage() {
      Init
   ===================== */
   useEffect(() => {
-    if (logs.length > 0) return;
-
+    if (!progress.ready || hydrated) return;
+    const saved = progress.initial.current;
+    if (saved) {
+      lastSpokenRef.current = [...saved.logs].reverse().find((m) => m.role === "examiner")?.text ?? "";
+      applyProgress(saved); setHydrated(true); return;
+    }
     const first = `Hello, my name is ${candidateName}. We are going to speak at this volume. Can you hear me clearly?`;
     const initLogs: Msg[] = [{ role: "examiner", text: first }];
-    setLogs(initLogs);
-    saveSmalltalkToSession(initLogs);
+    if (applyProgress({ logs: initLogs, input: "", phase: "volume", followupCount: 0, userIntro: "", pendingReply: false })) setHydrated(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logs.length]);
+  }, [progress.ready, hydrated]);
 
   useEffect(() => {
     if (logs.length === 0) return;
@@ -505,16 +513,35 @@ export default function SmalltalkPage() {
   }, [logs]);
 
   function onStartTest() {
-    router.push("/topic");
+    if (progress.advance("topic")) router.push("/topic");
   }
 
   function onGoTop() {
     router.push("/");
   }
 
-  const micDisabled = audio.busy || busy || phase === "ready_to_start" || isTranscribing || isStarting || isRecording;
+  async function recoverRecording() {
+    const saved = progress.current.current;
+    if (recoveryBusy.current || !saved?.pendingTranscription || !progress.isCurrent()) return;
+    recoveryBusy.current = true; setIsTranscribing(true); setRecError("");
+    try {
+      const blob = await loadLocalRecording(progress.runId, `turn-${saved.recordingPart ?? 0}`);
+      if (!blob) throw new Error("保存した録音が見つかりません。録り直してください。");
+      const fd = new FormData(); fd.append("file", blob, `answer.${extFromMime(blob.type)}`); fd.append("language", "en");
+      const response = await fetch("/api/transcribe", { method: "POST", body: fd }); const data = await response.json();
+      if (!progress.isCurrent()) return;
+      if (!response.ok || !String(data.text ?? "").trim()) throw new Error(data.error ?? "文字起こしに失敗しました。");
+      if (!progress.patch({ pendingTranscription: false, input: String(data.text).trim() })) return;
+      setPendingTranscription(false); setInput(String(data.text).trim());
+      await sendText(String(data.text).trim(), true);
+    } catch (e) { setRecError(e instanceof Error ? e.message : "録音を復元できませんでした。"); }
+    finally { recoveryBusy.current = false; if (progress.isCurrent()) setIsTranscribing(false); }
+  }
+
+  const micDisabled = !hydrated || pendingReply || audio.busy || busy || phase === "ready_to_start" || isTranscribing || isStarting || isRecording;
 
   const canSend =
+    hydrated && !pendingReply &&
     !audio.busy &&
     !busy &&
     phase !== "ready_to_start" &&
@@ -621,6 +648,9 @@ export default function SmalltalkPage() {
   return (
     <main style={rootStyle}>
       <div style={shellStyle}>
+        <InterviewResumeNotice restored={progress.restored} error={progress.error} replay={hydrated ? () => void speakEn(lastExaminer) : undefined} disabled={busy || isRecording || audio.busy} />
+        {pendingReply ? <button type="button" disabled={busy || audio.busy} onClick={() => void retryPendingReply()}>同じ回答で質問を再取得</button> : null}
+        {pendingTranscription ? <button type="button" disabled={busy || isTranscribing || isRecording || audio.busy} onClick={() => void recoverRecording()}>保存した録音から回答を復元</button> : null}
         <SpeechPlaybackNotice {...audio} />
         {/* ====== Avatar ====== */}
         <div style={avatarWrapStyle}>
@@ -776,7 +806,7 @@ export default function SmalltalkPage() {
               <div style={{ display: "flex", gap: 10 }}>
                 <input
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => { progress.patch({ input: e.target.value }); setInput(e.target.value); }}
                   placeholder="Type your answer... (or use Mic)"
                   style={{
                     flex: 1,

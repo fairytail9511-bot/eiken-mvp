@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { ACCESS_CHANGED_EVENT } from "@/app/lib/interviewProgress";
 
 const LS_KEY_IS_PRO = "speaking_is_pro";
 const LS_KEY_INTERVIEW_START = "eiken_mvp_interview_start";
@@ -78,6 +79,12 @@ export default function PaidPlanNudge() {
   const [purchaseBusy, setPurchaseBusy] = useState(false);
   const [interviewUsed, setInterviewUsed] = useState(0);
   const [trainingUsed, setTrainingUsed] = useState(0);
+
+  useEffect(() => {
+    const sync = () => { const pro = getIsPro(); setIsPro(pro); setPurchaseBusy(false); if (pro) setVisible(false); };
+    window.addEventListener(ACCESS_CHANGED_EVENT, sync);
+    return () => window.removeEventListener(ACCESS_CHANGED_EVENT, sync);
+  }, []);
 
   useEffect(() => {
     const pro = getIsPro();

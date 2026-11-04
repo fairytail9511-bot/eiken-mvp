@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ACTIVE_REVIEW_ITEM_KEY, loadReviewList } from "@/app/lib/reviewList";
+import { ACCESS_CHANGED_EVENT, beginInterview, interviewPath, loadInterview } from "@/app/lib/interviewProgress";
 
 const LS_KEY_INTERVIEW_START = "eiken_mvp_interview_start";
 const LS_KEY_AUDIO_UNLOCKED = "eiken_mvp_audio_unlocked";
@@ -83,6 +84,8 @@ export default function HomePage() {
   const [trialUsed, setTrialUsed] = useState(false);
   const [freeCount, setFreeCount] = useState(0);
   const [dueReviewCount, setDueReviewCount] = useState(0);
+  const [resumePath, setResumePath] = useState("");
+  const [confirmRestart, setConfirmRestart] = useState(false);
 
   const [showPlans, setShowPlans] = useState(false);
   const [purchaseBusy, setPurchaseBusy] = useState(false);
@@ -146,6 +149,11 @@ export default function HomePage() {
     const onFocus = () => {
       refreshAccessState();
       refreshReviewCount();
+      try {
+        const active = loadInterview();
+        setResumePath(active && active.stage !== "result" ? interviewPath(active) : "");
+      } catch { setResumePath(""); }
+      if (getIsPro()) { setShowPlans(false); setPurchaseBusy(false); }
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") {
@@ -155,11 +163,14 @@ export default function HomePage() {
     };
 
     window.addEventListener("focus", onFocus);
+    window.addEventListener(ACCESS_CHANGED_EVENT, onFocus);
+    onFocus();
     window.addEventListener(OPEN_PLANS_EVENT, openPlansIfRequested);
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener(ACCESS_CHANGED_EVENT, onFocus);
       window.removeEventListener(OPEN_PLANS_EVENT, openPlansIfRequested);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -198,7 +209,13 @@ export default function HomePage() {
     } catch {}
   }
 
-  function goSmalltalk() {
+  function goSmalltalk(discardCurrent = false) {
+    const active = loadInterview();
+    // Use in-page confirmation: older WKWebView wrappers may not implement
+    // JavaScript confirm dialogs and would otherwise block every restart.
+    if (active && active.stage !== "result" && !discardCurrent) { setConfirmRestart(true); return; }
+    beginInterview();
+    localStorage.removeItem("eiken_mvp_pendingInterview");
     try {
       sessionStorage.removeItem(ACTIVE_REVIEW_ITEM_KEY);
     } catch {}
@@ -214,7 +231,7 @@ export default function HomePage() {
     router.push("/smalltalk");
   }
 
-  function onStartInterview() {
+  function onStartInterview(discardCurrent = false) {
     setBlockMsg(null);
     refreshAccessState();
 
@@ -223,12 +240,12 @@ export default function HomePage() {
       const trial = getTrialUsed();
 
       if (pro) {
-        goSmalltalk();
+        goSmalltalk(discardCurrent);
         return;
       }
 
       if (!trial) {
-        goSmalltalk();
+        goSmalltalk(discardCurrent);
         return;
       }
 
@@ -238,7 +255,7 @@ export default function HomePage() {
         return;
       }
 
-      goSmalltalk();
+      goSmalltalk(discardCurrent);
     } catch {
       setBlockMsg("状態の取得に失敗しました。ページを更新してもう一度お試しください。");
     }
@@ -437,9 +454,15 @@ export default function HomePage() {
         {!showPlans ? (
           <>
             <div style={{ display: "grid", gap: 12 }}>
-              <button type="button" onClick={onStartInterview} style={mainBtn}>
+              <button type="button" onClick={() => onStartInterview()} style={mainBtn}>
                 面接開始
               </button>
+              {resumePath ? <button type="button" onClick={() => router.push(resumePath)} style={subBtn}>途中の面接を再開</button> : null}
+              {confirmRestart ? <div role="alertdialog" aria-label="新しい面接の確認" style={{ color: "#fff", padding: 12, border: "1px solid #eab308", borderRadius: 12 }}>
+                <p>途中の面接を終了して、新しい面接を始めますか？ 保存済みの結果や録音は削除しません。</p>
+                <button type="button" style={subBtn} onClick={() => { setConfirmRestart(false); onStartInterview(true); }}>新しい面接を開始</button>
+                <button type="button" style={subBtn} onClick={() => setConfirmRestart(false)}>途中の面接を残す</button>
+              </div> : null}
 
               <Link href="/settings" style={subBtn}>
                 設定

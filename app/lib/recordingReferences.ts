@@ -13,6 +13,7 @@ export async function isRecordingReferenced(sessionId: string, excludedTopicAtte
   const keys = [
     "speaking_recent_records_free", "eiken_mvp_reviewList", "eiken_mvp_lastSession",
     "eiken_mvp_previousAttempt", "eiken_mvp_pendingInterview", "eiken_mvp_topicAttemptHistory",
+    "eiken_mvp_interview_progress_v1",
   ];
   for (const key of keys) {
     const raw = localStorage.getItem(key);
