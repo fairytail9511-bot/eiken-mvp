@@ -27,7 +27,7 @@
 +                window.dispatchEvent(new Event('eiken_mvp_access_changed'));
 +            })();
 +            """
- 
+@@
 -            webView?.evaluateJavaScript(js) { _, error in
 +            webView.evaluateJavaScript(js) { _, error in
 @@
