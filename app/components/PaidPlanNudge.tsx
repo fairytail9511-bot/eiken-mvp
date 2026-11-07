@@ -2,19 +2,15 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
 import { ACCESS_CHANGED_EVENT } from "@/app/lib/interviewProgress";
+import { FREE_ALLOWANCE_TEXT, INITIAL_TRIAL_TEXT, OPEN_PLANS_EVENT, PAID_PLANS, PLAN_VIEW_ACTIVE_KEY, SHOW_PLANS_KEY } from "@/app/lib/planPresentation";
+import { canShowAutomaticPlanNudge, claimAutomaticPlanNudge, isInlinePlanPromptPath, readPlanUsage } from "@/app/lib/planNudgePolicy";
 
 const LS_KEY_IS_PRO = "speaking_is_pro";
-const LS_KEY_INTERVIEW_START = "eiken_mvp_interview_start";
-const LS_KEY_FREE_COUNT = "speaking_free_count";
-const LS_KEY_TRAINING_FREE_COUNT = "speaking_training_free_count";
-const LS_KEY_SHOW_PLANS = "eiken_mvp_show_plans";
-const SS_KEY_SKIP_NUDGE_ON_HOME = "eiken_mvp_skip_nudge_on_home";
-const OPEN_PLANS_EVENT = "eiken_mvp_open_plans";
 
 const INTERVIEW_LIMIT = 3;
 const TRAINING_LIMIT = 2;
-const ACTIVE_INTERVIEW_WINDOW_MS = 3 * 60 * 60 * 1000;
 
 function hasIAPBridge(): boolean {
   try {
@@ -30,15 +26,6 @@ function postIAPMessage(payload: any) {
   } catch {}
 }
 
-function getNumber(key: string): number {
-  try {
-    const n = Number(localStorage.getItem(key) || "0");
-    return Number.isFinite(n) ? Math.max(0, n) : 0;
-  } catch {
-    return 0;
-  }
-}
-
 function getIsPro(): boolean {
   try {
     return localStorage.getItem(LS_KEY_IS_PRO) === "1";
@@ -47,77 +34,58 @@ function getIsPro(): boolean {
   }
 }
 
-function hasActiveInterview(): boolean {
-  try {
-    const startedAt = Number(localStorage.getItem(LS_KEY_INTERVIEW_START) || "0");
-    if (!Number.isFinite(startedAt) || startedAt <= 0) return false;
-    return Date.now() - startedAt < ACTIVE_INTERVIEW_WINDOW_MS;
-  } catch {
-    return false;
-  }
-}
-
-function isExcludedPath(pathname: string) {
-  return (
-    pathname === "/privacy" ||
-    pathname === "/privacy2" ||
-    pathname === "/terms" ||
-    pathname === "/support"
-  );
-}
-
-function isInterviewInProgressPath(pathname: string) {
-  return pathname === "/smalltalk" || pathname === "/topic" || pathname === "/speech" || pathname === "/qa";
-}
-
 export default function PaidPlanNudge() {
   const pathname = usePathname();
   const router = useRouter();
 
   const [visible, setVisible] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [isPro, setIsPro] = useState(false);
   const [purchaseBusy, setPurchaseBusy] = useState(false);
   const [interviewUsed, setInterviewUsed] = useState(0);
   const [trainingUsed, setTrainingUsed] = useState(0);
 
   useEffect(() => {
-    const sync = () => { const pro = getIsPro(); setIsPro(pro); setPurchaseBusy(false); if (pro) setVisible(false); };
+    let cancelled = false;
+    let storage: Storage | undefined;
+    try { storage = localStorage; } catch { /* Disable automatic offers when storage is unavailable. */ }
+    let timer: number | undefined;
+    const cancel = () => { cancelled = true; window.clearTimeout(timer); setVisible(false); };
+    const sync = () => {
+      const pro = getIsPro();
+      const usage = storage ? readPlanUsage(storage) : { interview: 0, training: 0 };
+      setIsPro(pro); setInterviewUsed(usage.interview); setTrainingUsed(usage.training); setPurchaseBusy(false);
+      if (pro) cancel();
+    };
+    const playing = () => Array.from(document.querySelectorAll<HTMLMediaElement>("audio, video")).some((media) => !media.paused && !media.ended);
+    const manualPlanViewOpen = () => {
+      try { return sessionStorage.getItem(PLAN_VIEW_ACTIVE_KEY) === "1"; }
+      catch { return true; }
+    };
+    const onVisibility = () => { if (document.visibilityState !== "visible") cancel(); };
+    setVisible(false); setHydrated(true); sync();
+    if (storage && !manualPlanViewOpen() && document.visibilityState === "visible" && !playing() && canShowAutomaticPlanNudge(pathname, storage)) {
+      timer = window.setTimeout(() => {
+        if (storage && !cancelled && !manualPlanViewOpen() && document.visibilityState === "visible" && !playing() && claimAutomaticPlanNudge(pathname, storage)) setVisible(true);
+      }, 1200);
+    }
     window.addEventListener(ACCESS_CHANGED_EVENT, sync);
-    return () => window.removeEventListener(ACCESS_CHANGED_EVENT, sync);
-  }, []);
-
-  useEffect(() => {
-    const pro = getIsPro();
-    setIsPro(pro);
-    setInterviewUsed(getNumber(LS_KEY_FREE_COUNT));
-    setTrainingUsed(getNumber(LS_KEY_TRAINING_FREE_COUNT));
-
-    if (pro || isExcludedPath(pathname)) {
-      setVisible(false);
-      return;
-    }
-
-    if (isInterviewInProgressPath(pathname) && hasActiveInterview()) {
-      setVisible(false);
-      return;
-    }
-
-    try {
-      if (pathname === "/" && sessionStorage.getItem(SS_KEY_SKIP_NUDGE_ON_HOME) === "1") {
-        sessionStorage.removeItem(SS_KEY_SKIP_NUDGE_ON_HOME);
-        setVisible(false);
-        return;
-      }
-    } catch {}
-
-    const timer = window.setTimeout(() => setVisible(true), 450);
-    return () => window.clearTimeout(timer);
+    window.addEventListener(OPEN_PLANS_EVENT, cancel);
+    document.addEventListener("play", cancel, true);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true; window.clearTimeout(timer);
+      window.removeEventListener(ACCESS_CHANGED_EVENT, sync);
+      window.removeEventListener(OPEN_PLANS_EVENT, cancel);
+      document.removeEventListener("play", cancel, true);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [pathname]);
 
   const remainingText = useMemo(() => {
     const interview = `${Math.min(interviewUsed, INTERVIEW_LIMIT)}/${INTERVIEW_LIMIT}`;
     const training = `${Math.min(trainingUsed, TRAINING_LIMIT)}/${TRAINING_LIMIT}`;
-    return `無料枠：面接 ${interview} 回・トレーニング ${training} 回`;
+    return `今月の利用回数：面接 ${interview} 回・トレーニング ${training} 回（別々の無料枠です）`;
   }, [interviewUsed, trainingUsed]);
 
   function startPurchase(productId: string) {
@@ -156,7 +124,21 @@ export default function PaidPlanNudge() {
     }, 6000);
   }
 
-  if (isPro || !visible) return null;
+  function openPlans() {
+    try { localStorage.setItem(SHOW_PLANS_KEY, "1"); } catch {}
+    setVisible(false);
+    try { window.dispatchEvent(new Event(OPEN_PLANS_EVENT)); } catch {}
+    if (pathname !== "/") router.push("/");
+  }
+
+  if (isPro || !hydrated) return null;
+  if (!visible || pathname !== "/") {
+    if (!isInlinePlanPromptPath(pathname)) return null;
+    return <aside aria-label="有料プランのご案内" style={{ background: "#f8fafc", color: "#334155", padding: "10px 16px", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexWrap: "wrap" }}>
+      <span>{FREE_ALLOWANCE_TEXT}。Proなら練習回数の上限なし。</span>
+      <button type="button" onClick={openPlans} style={{ background: "none", border: 0, textDecoration: "underline", color: "#1d4ed8", cursor: "pointer", fontWeight: 700 }}>プランを見る</button>
+    </aside>;
+  }
 
   const overlay: React.CSSProperties = {
     position: "fixed",
@@ -227,7 +209,7 @@ export default function PaidPlanNudge() {
   };
 
   return (
-    <div style={overlay} aria-live="polite">
+    <div style={overlay} role="dialog" aria-modal="true" aria-label="有料プランのご案内">
       <style>{`
         @keyframes paid-nudge-pop {
           from { transform: translateY(18px) scale(0.98); opacity: 0; }
@@ -253,7 +235,7 @@ export default function PaidPlanNudge() {
                   fontWeight: 900,
                 }}
               >
-                英会話教室数回分で、1年分の面接練習へ
+                本番まで、あなたに合った期間で対策
               </div>
 
               <div style={{ marginTop: 12, fontSize: 30, lineHeight: 1.14, fontWeight: 950, letterSpacing: 0 }}>
@@ -273,7 +255,7 @@ export default function PaidPlanNudge() {
               </div>
 
               <div style={{ marginTop: 10, color: "rgba(255,255,255,0.76)", fontSize: 13, lineHeight: 1.75 }}>
-                英会話レッスン数回分ほどの料金で、面接・分析・改善例・記録保存・トレーニングを上限なしで使えます。
+                面接・分析・改善例・記録保存・トレーニングを、練習回数の上限なく利用できます。
               </div>
             </div>
 
@@ -310,10 +292,11 @@ export default function PaidPlanNudge() {
             }}
           >
             <div style={{ color: "rgba(253,224,71,0.98)", fontSize: 13, fontWeight: 900 }}>
-              無料枠は月5回まで。Proなら「今日はもう使えない」をなくせます。
+              {FREE_ALLOWANCE_TEXT}
             </div>
             <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, lineHeight: 1.55 }}>
               {remainingText}
+              <div>{INITIAL_TRIAL_TEXT}</div>
             </div>
           </div>
 
@@ -356,13 +339,13 @@ export default function PaidPlanNudge() {
           >
             <div>
               <div style={{ color: "rgba(253,224,71,0.98)", fontSize: 12, fontWeight: 900 }}>
-                最もコスパが良いのは年額プラン
+                {PAID_PLANS.monthly.name}｜{PAID_PLANS.monthly.purpose}
               </div>
               <div style={{ marginTop: 3, color: "#fff", fontSize: 21, fontWeight: 950 }}>
-                年額30,000円
+                {PAID_PLANS.monthly.price}
               </div>
               <div style={{ marginTop: 2, color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
-                月あたり2,500円。英会話教室に数回通うより、練習量を作りやすい設計です。
+                本番までの短期集中に。{PAID_PLANS.monthly.renewal}。
               </div>
             </div>
             <div
@@ -376,24 +359,24 @@ export default function PaidPlanNudge() {
                 whiteSpace: "nowrap",
               }}
             >
-              最もお得
+              短期集中
             </div>
           </div>
 
           <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
             <button
               type="button"
-              onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.yearly")}
+              onClick={() => startPurchase(PAID_PLANS.monthly.productId)}
               disabled={purchaseBusy}
               style={button}
             >
-              最もお得な年額プランで始める
+              {PAID_PLANS.monthly.price}で始める
             </button>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <button
                 type="button"
-                onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.monthly")}
+                onClick={() => startPurchase(PAID_PLANS.yearly.productId)}
                 disabled={purchaseBusy}
                 style={{
                   ...button,
@@ -405,26 +388,12 @@ export default function PaidPlanNudge() {
                   fontSize: 13,
                 }}
               >
-                月額
+                {PAID_PLANS.yearly.price}
               </button>
 
               <button
                 type="button"
-                onClick={() => {
-                  try {
-                    localStorage.setItem(LS_KEY_SHOW_PLANS, "1");
-                  } catch {}
-                  setVisible(false);
-                  try {
-                    window.dispatchEvent(new Event(OPEN_PLANS_EVENT));
-                  } catch {}
-                  if (pathname !== "/") {
-                    try {
-                      sessionStorage.setItem(SS_KEY_SKIP_NUDGE_ON_HOME, "1");
-                    } catch {}
-                    router.push("/");
-                  }
-                }}
+                onClick={openPlans}
                 style={{
                   ...button,
                   padding: "12px 10px",
@@ -439,6 +408,12 @@ export default function PaidPlanNudge() {
               </button>
             </div>
           </div>
+
+          <p style={{ fontSize: 11, color: "rgba(255,255,255,0.76)", lineHeight: 1.7 }}>
+            年額プランは{PAID_PLANS.yearly.monthlyEquivalent}。{PAID_PLANS.yearly.renewal}。<br />
+            各プランは自動更新です。購入前にAppleの確認画面で価格・期間をご確認ください。解約はApple IDのサブスクリプション設定から行えます。<br />
+            <Link href="/terms" style={{ textDecoration: "underline" }}>利用規約</Link>・<Link href="/privacy" style={{ textDecoration: "underline" }}>プライバシーポリシー</Link>
+          </p>
 
           <button
             type="button"

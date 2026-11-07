@@ -429,6 +429,33 @@ test('topic deletion excludes only that attempt and protects free, previous and 
   await assert.rejects(env.references.isRecordingReferenced('attempt-1', 'topic-entry'));
 });
 
+test('first-trial Result offers plans inline at the end without blocking or changing its score and recording ID', async () => {
+  const env = environment();
+  const attempt = { ...session('trial-recording'), accessMode: 'trial' };
+  env.data.set('eiken_mvp_lastSession', JSON.stringify(attempt));
+  const page = renderPage(env, '../app/result/ResultClient.tsx');
+  await page.flush();
+  assert.equal(page.nodes().some(node => node.props.role === 'dialog'), false);
+  const button = page.nodes().find(node => node.type === 'button' && node.props.children === '有料プランを見る');
+  assert.ok(button);
+  assert.equal(env.data.has('eiken_mvp_show_plans'), false);
+  button.props.onClick();
+  assert.equal(env.data.get('eiken_mvp_show_plans'), '1');
+  const saved = JSON.parse(env.data.get('eiken_mvp_lastSession'));
+  assert.equal(saved.audioSessionId, 'trial-recording'); assert.deepEqual(saved.scoreResult, attempt.scoreResult);
+  page.dispose();
+});
+
+test('a locked Result feature explicitly requests the plan list without automatic promotion', async () => {
+  const env = environment(); env.data.set('speaking_trial_used', '1');
+  env.data.set('eiken_mvp_lastSession', JSON.stringify({ ...session(), accessMode: 'free' }));
+  const page = renderPage(env, '../app/result/ResultClient.tsx'); await page.flush();
+  assert.equal(env.data.has('eiken_mvp_show_plans'), false);
+  const card = page.nodes().find(node => typeof node.props.onGoPlans === 'function');
+  assert.ok(card); card.props.onGoPlans(); assert.equal(env.data.get('eiken_mvp_show_plans'), '1');
+  page.dispose();
+});
+
 test('actual Result Save waits for commit, blocks double clicks and stays deduplicated after remount', async () => {
   const env = environment();
   env.data.set('speaking_is_pro', '1');

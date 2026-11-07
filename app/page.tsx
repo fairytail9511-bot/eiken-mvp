@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ACTIVE_REVIEW_ITEM_KEY, loadReviewList } from "@/app/lib/reviewList";
 import { ACCESS_CHANGED_EVENT, beginInterview, interviewPath, loadInterview } from "@/app/lib/interviewProgress";
+import { FREE_ALLOWANCE_TEXT, INITIAL_TRIAL_TEXT, OPEN_PLANS_EVENT, PAID_PLANS, PLAN_VIEW_ACTIVE_KEY, SHOW_PLANS_KEY } from "@/app/lib/planPresentation";
 
 const LS_KEY_INTERVIEW_START = "eiken_mvp_interview_start";
 const LS_KEY_AUDIO_UNLOCKED = "eiken_mvp_audio_unlocked";
@@ -14,8 +15,7 @@ const LS_KEY_IS_PRO = "speaking_is_pro";
 const LS_KEY_TRIAL_USED = "speaking_trial_used";
 const LS_KEY_FREE_MONTH = "speaking_free_month";
 const LS_KEY_FREE_COUNT = "speaking_free_count";
-const LS_KEY_SHOW_PLANS = "eiken_mvp_show_plans";
-const OPEN_PLANS_EVENT = "eiken_mvp_open_plans";
+const LS_KEY_SHOW_PLANS = SHOW_PLANS_KEY;
 const FREE_LIMIT = 3;
 
 function monthKeyNow() {
@@ -90,6 +90,14 @@ export default function HomePage() {
   const [showPlans, setShowPlans] = useState(false);
   const [purchaseBusy, setPurchaseBusy] = useState(false);
 
+  useEffect(() => {
+    try {
+      if (showPlans) sessionStorage.setItem(PLAN_VIEW_ACTIVE_KEY, "1");
+      else sessionStorage.removeItem(PLAN_VIEW_ACTIVE_KEY);
+    } catch {}
+    return () => { try { sessionStorage.removeItem(PLAN_VIEW_ACTIVE_KEY); } catch {} };
+  }, [showPlans]);
+
   const refreshAccessState = useCallback(() => {
     try {
       const pro = getIsPro();
@@ -104,7 +112,7 @@ export default function HomePage() {
         ? "有料：無制限（全機能）"
         : !trial
         ? "無料：初回はフル体験できます"
-        : `無料：月${FREE_LIMIT}回まで（今月 ${Math.min(used, FREE_LIMIT)}/${FREE_LIMIT} 回）`;
+        : `無料：面接は月${FREE_LIMIT}回まで（今月 ${Math.min(used, FREE_LIMIT)}/${FREE_LIMIT} 回）。トレーニングは別枠で月2回。`;
 
       setStatusText(text);
     } catch {
@@ -175,6 +183,12 @@ export default function HomePage() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refreshAccessState, refreshReviewCount]);
+
+  function openPlans() {
+    setShowPlans(true);
+    // Dismiss/cancel the automatic Home offer so two purchase views cannot overlap.
+    try { window.dispatchEvent(new Event(OPEN_PLANS_EVENT)); } catch {}
+  }
 
   function unlockAudioOnce() {
     try {
@@ -251,7 +265,8 @@ export default function HomePage() {
 
       const used = getFreeCountThisMonth();
       if (used >= FREE_LIMIT) {
-        setBlockMsg(`無料枠（月${FREE_LIMIT}回）に達しました。\n続きは有料プランで解放されます。`);
+        setBlockMsg(`無料の面接枠（月${FREE_LIMIT}回）に達しました。\nトレーニングの無料枠（月2回）は別に利用できます。`);
+        openPlans();
         return;
       }
 
@@ -507,7 +522,7 @@ export default function HomePage() {
 
               <button
                 type="button"
-                onClick={() => setShowPlans(true)}
+                onClick={openPlans}
                 style={{
                   ...subBtn,
                   background: "rgba(255, 220, 110, 0.96)",
@@ -588,8 +603,8 @@ export default function HomePage() {
                   }}
                 >
                   {!trialUsed
-                    ? `初回はフル体験できます。その後は月${FREE_LIMIT}回まで無料で利用できます。`
-                    : `現在の無料利用状況：今月 ${Math.min(freeCount, FREE_LIMIT)}/${FREE_LIMIT} 回`}
+                    ? `${INITIAL_TRIAL_TEXT} ${FREE_ALLOWANCE_TEXT}。`
+                    : `無料の面接利用状況：今月 ${Math.min(freeCount, FREE_LIMIT)}/${FREE_LIMIT} 回。トレーニングは別枠で月2回まで。`}
                 </div>
               ) : null}
             </div>
@@ -640,91 +655,21 @@ export default function HomePage() {
               プランを選択
             </div>
 
-            <div style={planCard(false)}>
-              <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>松｜月額プラン</div>
-              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>月額5,000円</div>
-              <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
-                本番まで短期集中したい人向け。英会話教室1回分前後の料金で、無制限にAI面接練習・分析・改善例・トレーニングを1ヶ月しっかり使えます。
-              </div>
-              <button
-                type="button"
-                onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.monthly")}
-                disabled={purchaseDisabled}
-                style={{
-                  ...planButton,
-                  marginTop: 12,
-                  opacity: purchaseButtonOpacity,
-                  cursor: purchaseDisabled ? "not-allowed" : "pointer",
-                }}
-              >
+            {blockMsg ? <div role="status" style={{ padding: 12, borderRadius: 12, border: "1px solid rgba(234,179,8,0.5)", color: "#fff7cc", fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{blockMsg}</div> : null}
+            <div style={{ fontSize: 12, color: "rgba(255,255,255,0.8)", lineHeight: 1.7 }}>{FREE_ALLOWANCE_TEXT}。必要な期間に合わせてお選びください。</div>
+
+            {Object.values(PAID_PLANS).map((plan) => <div key={plan.productId} style={planCard(plan === PAID_PLANS.monthly)}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#92400e" }}>{plan.purpose}</div>
+              <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a", marginTop: 4 }}>{plan.name}</div>
+              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>{plan.price}</div>
+              {"monthlyEquivalent" in plan ? <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#475569" }}>{plan.monthlyEquivalent}</div> : null}
+              <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>{plan.description}</div>
+              <div style={{ marginTop: 6, fontSize: 12, color: "#475569" }}>{plan.renewal}</div>
+              <button type="button" onClick={() => startPurchase(plan.productId)} disabled={purchaseDisabled}
+                style={{ ...planButton, marginTop: 12, opacity: purchaseButtonOpacity, cursor: purchaseDisabled ? "not-allowed" : "pointer" }}>
                 {purchaseButtonLabel}
               </button>
-            </div>
-
-            <div style={planCard(true)}>
-              <div
-                style={{
-                  position: "absolute",
-                  top: -10,
-                  right: 12,
-                  padding: "5px 10px",
-                  borderRadius: 999,
-                  background: "linear-gradient(180deg, rgba(234,179,8,1), rgba(202,138,4,1))",
-                  color: "#fff",
-                  fontSize: 11,
-                  fontWeight: 900,
-                  boxShadow: "0 8px 18px rgba(0,0,0,0.22)",
-                }}
-              >
-                一番人気
-              </div>
-
-              <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>竹｜3ヶ月プラン</div>
-              <div style={{ marginTop: 4, fontSize: 26, fontWeight: 900, color: "#0f172a" }}>3ヶ月12,000円</div>
-              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#b45309" }}>
-                月あたり4,000円
-              </div>
-              <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
-                本番まで計画的にコツコツ対策したい人向け。
-              </div>
-              <button
-                type="button"
-                onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.3months")}
-                disabled={purchaseDisabled}
-                style={{
-                  ...planButton,
-                  marginTop: 12,
-                  opacity: purchaseButtonOpacity,
-                  cursor: purchaseDisabled ? "not-allowed" : "pointer",
-                }}
-              >
-                {purchaseButtonLabel}
-              </button>
-            </div>
-
-            <div style={planCard(false)}>
-              <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>梅｜年額プラン</div>
-              <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900, color: "#0f172a" }}>年額30,000円</div>
-              <div style={{ marginTop: 4, fontSize: 12, fontWeight: 800, color: "#475569" }}>
-                月あたり2,500円
-              </div>
-              <div style={{ marginTop: 6, fontSize: 12, color: "#475569", lineHeight: 1.7 }}>
-                最もお得。長期的に計画を立てて着実に実力をつけたい人向け。
-              </div>
-              <button
-                type="button"
-                onClick={() => startPurchase("com.fairytail9511.eiken.grade1.speaking.yearly")}
-                disabled={purchaseDisabled}
-                style={{
-                  ...planButton,
-                  marginTop: 12,
-                  opacity: purchaseButtonOpacity,
-                  cursor: purchaseDisabled ? "not-allowed" : "pointer",
-                }}
-              >
-                {purchaseButtonLabel}
-              </button>
-            </div>
+            </div>)}
 
             <div
               style={{

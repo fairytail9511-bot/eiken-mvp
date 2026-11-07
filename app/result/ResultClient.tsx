@@ -9,6 +9,7 @@ import { clearLocalRecordingSession, createRecordingSessionId } from "@/app/lib/
 import { saveProRecord, upsertFreeRecentRecord } from "@/app/lib/recordStore";
 import { isRecordingReferenced } from "@/app/lib/recordingReferences";
 import { ACCESS_CHANGED_EVENT, beginInterview } from "@/app/lib/interviewProgress";
+import { FREE_ALLOWANCE_TEXT, SHOW_PLANS_KEY } from "@/app/lib/planPresentation";
 import {
   ACTIVE_REVIEW_ITEM_KEY,
   addReviewItem,
@@ -841,6 +842,7 @@ export default function ResultClient() {
   }
 
   function goPlans() {
+    try { localStorage.setItem(SHOW_PLANS_KEY, "1"); } catch {}
     router.push("/");
   }
 
@@ -1971,6 +1973,11 @@ export default function ResultClient() {
             >
               {reviewListAdded ? "復習リストに登録済み" : "復習リストに追加"}
             </button>
+
+            {!fromRecords && !isPro && isFirstTrialAccess ? <div style={{ width: "100%", border: "1px solid #eab308", borderRadius: 14, padding: 14, color: "#fff7cc", fontSize: 13, lineHeight: 1.7 }}>
+              初回フル体験、おつかれさまでした。{FREE_ALLOWANCE_TEXT}。さらに練習を続けたい方は、期間に合ったプランを選べます。
+              <button type="button" onClick={goPlans} style={{ ...pillBtn, display: "block", marginTop: 10 }}>有料プランを見る</button>
+            </div> : null}
 
             <Link
               href="/review"

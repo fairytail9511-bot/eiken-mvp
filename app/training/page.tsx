@@ -2,10 +2,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getTrainingUsage, type TrainingUsage } from "@/app/lib/trainingAccess";
+import { SHOW_PLANS_KEY } from "@/app/lib/planPresentation";
 
 export default function TrainingPage() {
+  const router = useRouter();
   const [usage, setUsage] = useState<TrainingUsage>({
     isPro: false,
     used: 0,
@@ -22,7 +25,10 @@ export default function TrainingPage() {
   const usageText = isPro
     ? "有料：トレーニング無制限"
     : `無料：トレーニング月${usage.limit}回まで（今月 ${Math.min(usage.used, usage.limit)}/${usage.limit} 回）`;
-  const blockedMessage = `無料トレーニング枠（月${usage.limit}回）に達しました。続きは有料プランで解放されます。`;
+  function openPlans() {
+    try { localStorage.setItem(SHOW_PLANS_KEY, "1"); } catch {}
+    router.push("/");
+  }
 
   const pageBg: React.CSSProperties = {
     minHeight: "100vh",
@@ -146,7 +152,7 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert(blockedMessage)}
+            onClick={openPlans}
             style={lockedCardStyle}
           >
             <div style={cardTitleStyle}>🗣 Speechトレーニング</div>
@@ -169,7 +175,7 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert(blockedMessage)}
+            onClick={openPlans}
             style={lockedCardStyle}
           >
             <div style={cardTitleStyle}>💬 Q&amp;Aトレーニング</div>
@@ -192,7 +198,7 @@ export default function TrainingPage() {
         ) : (
           <button
             type="button"
-            onClick={() => alert(blockedMessage)}
+            onClick={openPlans}
             style={lockedCardStyle}
           >
             <div style={cardTitleStyle}>☕ Free Talk</div>
