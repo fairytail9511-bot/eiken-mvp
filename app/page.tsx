@@ -7,6 +7,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ACTIVE_REVIEW_ITEM_KEY, loadReviewList } from "@/app/lib/reviewList";
 import { ACCESS_CHANGED_EVENT, beginInterview, interviewPath, loadInterview } from "@/app/lib/interviewProgress";
 import { FREE_ALLOWANCE_TEXT, INITIAL_TRIAL_TEXT, OPEN_PLANS_EVENT, PAID_PLANS, PLAN_VIEW_ACTIVE_KEY, SHOW_PLANS_KEY } from "@/app/lib/planPresentation";
+import ExamCountdown from "@/app/components/ExamCountdown";
+import DailyMotivation from "@/app/components/DailyMotivation";
 
 const LS_KEY_INTERVIEW_START = "eiken_mvp_interview_start";
 const LS_KEY_AUDIO_UNLOCKED = "eiken_mvp_audio_unlocked";
@@ -468,6 +470,8 @@ export default function HomePage() {
 
         {!showPlans ? (
           <>
+            <ExamCountdown />
+            <DailyMotivation />
             <div style={{ display: "grid", gap: 12 }}>
               <button type="button" onClick={() => onStartInterview()} style={mainBtn}>
                 面接開始

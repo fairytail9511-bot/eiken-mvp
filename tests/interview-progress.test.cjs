@@ -65,6 +65,8 @@ function render(env, file, query = {}) {
     '@/app/lib/avatars': { isAvatarId: () => false, getAvatarConfig: () => ({ closedImage: '/closed', openImage: '/open', smallTalkName: 'Amanda' }) },
     '@/app/lib/reviewList': { ACTIVE_REVIEW_ITEM_KEY: 'active-review', loadReviewList: () => [] },
     '@/app/lib/planPresentation': env.load('../app/lib/planPresentation.ts'),
+    '@/app/components/ExamCountdown': { __esModule: true, default: 'ExamCountdown' },
+    '@/app/components/DailyMotivation': { __esModule: true, default: 'DailyMotivation' },
   }).default;
   function nodes(value) { if (!value || typeof value !== 'object') return []; if (Array.isArray(value)) return value.flatMap(nodes);
     return [value, ...nodes(value.props?.children)]; }

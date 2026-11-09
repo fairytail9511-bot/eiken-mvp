@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AVATAR_OPTIONS, isAvatarId, type AvatarId } from "@/app/lib/avatars";
+import ExamDateSettings from "@/app/components/ExamDateSettings";
 
 /* =====================
    Types & Defaults
@@ -226,6 +227,8 @@ export default function SettingsPage() {
       <div style={shellStyle}>
         <div style={glassCard}>
           <div style={titleStyle}>設定</div>
+
+          <ExamDateSettings />
 
           {/* ===== 面接難易度 ===== */}
           <div style={sectionTitle}>面接難易度（評価基準は一定）</div>
