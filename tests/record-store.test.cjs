@@ -97,6 +97,7 @@ function renderPage(env, file, query = {}) {
     'next/navigation': { useRouter: () => router, useSearchParams: () => ({ get: (key) => query[key] ?? null }), useParams: () => ({ metric: 'total' }) },
     'next/link': { __esModule: true, default: 'Link' },
     '@/app/components/LocalRecordingPlayer': { __esModule: true, default: 'RecordingPlayer' },
+    '@/app/components/ResultCardPreview': { __esModule: true, default: 'ResultCardPreview' },
   }, {
     window: { confirm: () => true, addEventListener() {}, removeEventListener() {} }, sessionStorage: env.localStorage,
     fetch: async () => { env.calls.fetch++; return { ok: true, json: async () => ({ intro: 'Intro', reason: 'Reason', example: 'Example', conclusion: 'Conclusion', improved: 'Improved' }) }; },
@@ -454,6 +455,36 @@ test('a locked Result feature explicitly requests the plan list without automati
   const card = page.nodes().find(node => typeof node.props.onGoPlans === 'function');
   assert.ok(card); card.props.onGoPlans(); assert.equal(env.data.get('eiken_mvp_show_plans'), '1');
   page.dispose();
+});
+
+test('actual Result passes only approved score/date data to cards for free, trial and Pro users, including saved results', async () => {
+  for (const accessMode of ['free', 'trial', 'pro']) {
+    const env = environment();
+    env.data.set('speaking_is_pro', accessMode === 'pro' ? '1' : '0');
+    env.data.set('speaking_trial_used', '1');
+    const attempt = { ...session(), accessMode, reviewMode: 'qa', topic: 'PRIVATE TOPIC', logs: { speech: 'PRIVATE SPEECH' } };
+    env.data.set('eiken_mvp_lastSession', JSON.stringify(attempt));
+    const page = renderPage(env, '../app/result/ResultClient.tsx', { from: 'records' }); await page.flush();
+    const card = page.nodes().find(node => node.type === 'ResultCardPreview');
+    assert.ok(card, accessMode); assert.equal(card.props.data.total, 28);
+    assert.ok(card.props.data.carryoverNote.includes('スピーチ'));
+    assert.equal(JSON.stringify(card.props).includes('PRIVATE'), false);
+    assert.equal(JSON.stringify(card.props).includes('attempt-1'), false);
+    assert.deepEqual(JSON.parse(env.data.get('eiken_mvp_lastSession')), attempt);
+    assert.equal(env.data.has(FREE), false);
+    page.dispose();
+  }
+});
+
+test('actual Result does not offer a score card for missing or corrupt score breakdowns', async () => {
+  for (const scoreResult of [undefined, { breakdown: { short_speech: 7 } }, { breakdown: { ...session().scoreResult.breakdown, interaction: 42 } }]) {
+    const env = environment();
+    env.data.set('speaking_trial_used', '1');
+    env.data.set('eiken_mvp_lastSession', JSON.stringify({ ...session(), accessMode: 'free', scoreResult }));
+    const page = renderPage(env, '../app/result/ResultClient.tsx', { from: 'records' }); await page.flush();
+    assert.equal(page.nodes().some(node => node.type === 'ResultCardPreview'), false);
+    page.dispose();
+  }
 });
 
 test('actual Result Save waits for commit, blocks double clicks and stays deduplicated after remount', async () => {

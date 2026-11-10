@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import LocalRecordingPlayer from "@/app/components/LocalRecordingPlayer";
+import ResultCardPreview from "@/app/components/ResultCardPreview";
+import { buildResultCardData } from "@/app/lib/resultCard";
 import { clearLocalRecordingSession, createRecordingSessionId } from "@/app/lib/localRecordings";
 import { saveProRecord, upsertFreeRecentRecord } from "@/app/lib/recordStore";
 import { isRecordingReferenced } from "@/app/lib/recordingReferences";
@@ -781,6 +783,7 @@ export default function ResultClient() {
   const bGV = asInt(breakdown.grammar_vocab);
   const bPron = asInt(breakdown.pronunciation_fluency);
   const total = bShort + bInter + bGV + bPron;
+  const resultCardData = buildResultCardData(sessionData);
 
   const threeBlocks = useMemo(() => {
     const ai = sessionData?.scoreResult?.three_blocks;
@@ -1307,6 +1310,8 @@ export default function ResultClient() {
                 </div>
               </Accordion>
             </Accordion>
+
+            {resultCardData && <ResultCardPreview key={JSON.stringify(resultCardData)} data={resultCardData} />}
 
             <Accordion icon={<span>💬</span>} title="Small talk 会話ログ">
               {smalltalk.length === 0 ? (
